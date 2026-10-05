@@ -59,7 +59,8 @@ MUTE = {
     "description": (
         "Switch stickers off in the current Telegram chat. Use it as soon as anyone in the chat "
         "asks you to stop sending stickers or says they are annoying, then confirm in words. It "
-        "cannot switch them back on: only the owner can, with /stickers on."
+        "cannot switch them back on: only the owner can, with /stickers on <chat id> in a direct chat "
+        "with the bot."
     ),
     "parameters": {"type": "object", "properties": {}},
 }

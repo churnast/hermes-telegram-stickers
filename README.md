@@ -44,9 +44,11 @@ Any public sticker set works; you do not need to own it.
 |---|---|---|
 | Tool | `telegram_sticker_send` | Sends one sticker to the current chat: by a few words ("cat rolling eyes"), by emoji, or by exact id. Replies to the message being answered, in its topic. |
 | Tool | `telegram_sticker_find` | Lists your packs and their emojis, or finds stickers by words or emoji, with a short description of each. |
-| Tool | `telegram_sticker_mute` | Switches stickers off in the current chat as soon as someone asks. Only you can switch them back on. |
-| Command | `/stickers` | Status, `sync`, `describe [n]`, `off` / `on` for this chat, `ban` / `unban <id>`, `about <id> <text>`. |
+| Tool | `telegram_sticker_mute` | Switches stickers off in the current chat as soon as someone asks. Only you can switch them back on, with `/stickers on <chat id>` in a direct chat with the bot. |
+| Command | `/stickers` | Status (in a direct chat, with the chats where stickers are off), `sync`, `describe [n]`, `off` / `on` for this chat, `off` / `on <chat id>` for any chat from a direct chat, `ban` / `unban <id>`, `about <id> <text>`. |
 | Skill | `telegram-stickers:sticker-etiquette` | When a sticker fits and when words are better. |
+
+On Hermes 0.21 and newer, plugin tools may sit behind the tool-search bridge (`tool_search`, `tool_describe`, `tool_call`), so the agent does not see them until it looks. The bundled skill tells it to call `telegram_sticker_send` and `telegram_sticker_find` through `tool_call` directly, which saves a search and a schema lookup before each sticker.
 
 ## How it picks a sticker
 
@@ -61,7 +63,7 @@ A Telegram sticker carries one emoji and nothing else, so an emoji alone is a bl
 
 - **Current chat only** by default. Other chats need `allow_other_chats: true`.
 - **About one sticker per 8 messages** in a chat (`min_messages_between`, counted by Telegram message numbers, so it is approximate) and never two within 20 seconds (`cooldown_seconds`). Both survive a restart.
-- **An opt-out that sticks.** When someone asks the agent to stop, it can mute the chat itself; `/stickers off` does the same by hand.
+- **An opt-out that sticks.** When someone asks the agent to stop, it can mute the chat itself; `/stickers off` does the same by hand. To switch a chat back on, open a direct chat with the bot: `/stickers` there lists the muted chats with their ids, and `/stickers on <chat id>` (for example `/stickers on -1001234567890`) switches one back on. This works even when commands typed in the group never reach the bot (for example in a group that needs a mention), and only in a direct chat, because anyone in a group may be able to run slash commands.
 - **Reply anchoring that does not fail.** If the bot cannot see the message it is answering (privacy mode in a group), the sticker goes out without the reply instead of erroring.
 - The forum **General topic** is handled: stickers go there without a thread id.
 
@@ -102,6 +104,8 @@ A complete example is in [`config.example.yaml`](config.example.yaml).
 | "No sticker description fits" | Run `/stickers describe`, or let the agent use an emoji. |
 | "the vision model gave no description" | Configure a vision model in Hermes (`hermes setup`), then run `/stickers describe` again. |
 | The agent never sends stickers | Check that `/stickers` says they are on in this chat and that the plugin is enabled. |
+| Stickers stay off in a group | Send `/stickers` to the bot in a direct chat to see the muted chats, then `/stickers on <chat id>` there. |
+| The agent says it has no sticker tools | On Hermes 0.21 and newer they may sit behind `tool_search`. The agent can call `telegram_sticker_send` through `tool_call` without searching. |
 
 ## Update and remove
 

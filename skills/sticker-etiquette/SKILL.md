@@ -33,6 +33,9 @@ A sticker is a person's quick reaction, not another way to deliver an answer.
    "sent a sticker" or describe it: the sticker is the reply.
 5. Got a sticker and want to acknowledge it without a new message: react with
    `send_message` (`action: "react"`) instead of sending a sticker back.
+6. If Hermes hides plugin tools behind `tool_search` / `tool_describe` / `tool_call`, call
+   `telegram_sticker_send` (`sticker`) and `telegram_sticker_find` (`query` or `emoji`) through
+   `tool_call` directly: no need to search for them first.
 
 ## Errors
 

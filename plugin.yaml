@@ -1,5 +1,5 @@
 name: telegram-stickers
-version: 0.1.0
+version: 0.1.1
 manifest_version: 2
 description: "Lets the agent answer with stickers from its owner's own Telegram sticker packs: picks by meaning or emoji, replies in the current chat and forum topic, avoids repeats, with a per-chat cooldown and an off switch."
 author: "churnast"

@@ -414,6 +414,19 @@ def _as_int(value: Any) -> int | None:
     return None
 
 
+_CHAT_ID = re.compile(r"-?[1-9][0-9]{0,19}")
+
+
+def chat_id_from_text(value: str) -> str:
+    """A chat id the owner typed, such as -1001234567890, in the form the session uses for the current chat."""
+    text = (value or "").strip()
+    if not _CHAT_ID.fullmatch(text):
+        raise StickerError(f"'{text[:40]}' is not a Telegram chat id. Chat ids are whole numbers such as "
+                           "-1001234567890; '/stickers' in a direct chat with the bot lists the chats where "
+                           "stickers are off.")
+    return text
+
+
 def resolve_target(args: dict[str, Any], session: dict[str, str],
                    allow_other_chats: bool) -> tuple[str, int | None, int | None]:
     """Return (chat_id, thread_id, reply_to_message_id).
@@ -668,8 +681,11 @@ class StickerService:
         session = self._session()
         return session.get("chat_id", "") if session.get("platform") == "telegram" else ""
 
+    def _in_direct_chat(self) -> bool:
+        return (self._session().get("chat_type") or "").strip().lower() in DIRECT_CHAT_TYPES
+
     def _require_direct_chat(self) -> None:
-        if (self._session().get("chat_type") or "").strip().lower() not in DIRECT_CHAT_TYPES:
+        if not self._in_direct_chat():
             raise StickerError("this command works in a direct chat with the bot")
 
     # tools
@@ -722,8 +738,8 @@ class StickerService:
     def send(self, args: dict[str, Any]) -> dict[str, Any]:
         chat, thread, reply_to = resolve_target(args, self._session(), self.allow_other_chats())
         if chat in self.muted():
-            raise StickerError("The owner switched stickers off in this chat ('/stickers on' switches them "
-                               "back). Answer in words.")
+            raise StickerError(f"The owner switched stickers off in this chat ('/stickers on {chat}' in a direct "
+                               "chat with the bot switches them back). Answer in words.")
         memory = self.state()["chats"].get(chat, {})
         cooldown = self.cooldown()
         now = self._clock()
@@ -773,7 +789,9 @@ class StickerService:
             "sticker": sticker_id(name, sticker),
             "emoji": sticker["emoji"],
             "replied_to": reply_to,
-            "note": "The sticker is the reply. Do not describe it in text.",
+            "note": ("The sticker is the whole reply: do not follow it with a line about it (no 'done', 'sent' "
+                     "or a description, in any language). Write text only for something worth saying beyond "
+                     "the sticker."),
         }
         about = description_of(descriptions, sticker)
         if about:
@@ -787,8 +805,8 @@ class StickerService:
             raise StickerError("This turn is not in a Telegram chat.")
         self.set_muted(chat, True)
         return {"success": True, "chat_id": chat,
-                "note": "Stickers are off in this chat. Tell them it is done; only the owner can switch "
-                        "them back on with /stickers on."}
+                "note": "Stickers are off in this chat. Tell them it is done; only the owner can switch them "
+                        f"back on, with '/stickers on {chat}' in a direct chat with the bot."}
 
     # slash command
     def command(self, raw_args: str = "") -> str:
@@ -798,7 +816,7 @@ class StickerService:
             if sub in ("", "status", "sync", "refresh", "reload"):
                 return self.status_text(refresh=sub in ("sync", "refresh", "reload"))
             if sub in ("off", "on"):
-                return self.switch_text(muted=sub == "off")
+                return self.switch_text(muted=sub == "off", chat=words[1] if len(words) > 1 else "")
             if sub in ("describe", "ban", "unban", "about"):
                 self._require_direct_chat()
             if sub == "describe":
@@ -810,7 +828,8 @@ class StickerService:
                 return self.about_text(words[1], " ".join(words[2:]))
         except StickerError as exc:
             return f"Stickers: {exc}"
-        return "Usage: /stickers [sync | describe [n] | off | on | ban <id> | unban <id> | about <id> <text>]"
+        return ("Usage: /stickers [sync | describe [n] | off [chat id] | on [chat id] | ban <id> | unban <id> "
+                "| about <id> <text>]")
 
     def ban_text(self, wanted: str, banned: bool) -> str:
         name, sticker = self._resolve(wanted)
@@ -844,9 +863,14 @@ class StickerService:
         for name, why in (catalog.get("skipped") or {}).items():
             lines.append(f"• {name}: not loaded ({why})")
         chat = self._current_telegram_chat()
+        muted = self.muted()
         if chat:
-            lines.append("Stickers are off in this chat ('/stickers on')." if chat in self.muted()
+            lines.append(f"Stickers are off in this chat ('/stickers on' here, or '/stickers on {chat}' in a direct "
+                         "chat with the bot)." if chat in muted
                          else "Stickers are on in this chat ('/stickers off' mutes them here).")
+        if muted and self._in_direct_chat():  # other chats' ids only for the owner, never in a group
+            lines.append(f"Stickers are off in {len(muted)} chat(s): {', '.join(sorted(muted))}. "
+                         "'/stickers on <chat id>' here switches one back on.")
         banned = self.banned()
         if banned:
             lines.append(f"{len(banned)} sticker(s) banned ('/stickers unban <id>' brings one back).")
@@ -868,10 +892,19 @@ class StickerService:
             lines.append(f"• {problem}")
         return "\n".join(lines)
 
-    def switch_text(self, muted: bool) -> str:
+    def switch_text(self, muted: bool, chat: str = "") -> str:
+        if chat:  # any chat by id: owner only, since anyone in a group may be able to run slash commands
+            self._require_direct_chat()
+            chat = chat_id_from_text(chat)
+            if not muted and chat not in self.muted():
+                return f"Stickers: they were not off in chat {chat}. '/stickers' lists the chats where they are off."
+            self.set_muted(chat, muted)
+            return (f"Stickers: switched off in chat {chat}. The agent answers in words there."
+                    if muted else f"Stickers: switched on in chat {chat}.")
         chat = self._current_telegram_chat()
         if not chat:
-            return "Stickers: '/stickers on' and '/stickers off' work inside a Telegram chat."
+            return ("Stickers: '/stickers on' and '/stickers off' work inside a Telegram chat, or name one: "
+                    "'/stickers on <chat id>'.")
         self.set_muted(chat, muted)
         return ("Stickers: switched off in this chat. The agent answers in words here."
                 if muted else "Stickers: switched on in this chat.")

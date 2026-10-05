@@ -491,3 +491,57 @@ def test_register_wires_tools_command_and_skill(tmp_path, monkeypatch):
     result = json.loads(ctx.tools["telegram_sticker_find"][2]({}))
     assert "settings.packs" in result["error"]
     assert "No sticker packs" in ctx.commands["stickers"]("")
+
+
+# --- v0.1.1: switching a chat by id from a direct chat, the muted list, the note after a sticker -------
+
+DM = {"platform": "telegram", "chat_id": "555", "thread_id": "", "message_id": "3", "chat_type": "dm"}
+GROUP = {"platform": "telegram", "chat_id": "-1001234567890", "thread_id": "", "message_id": "40", "chat_type": "group"}
+
+
+def test_owner_switches_a_chat_by_id_in_a_direct_chat(tmp_path):
+    owner, _, _ = make_service(tmp_path, FakeTelegram(), session=DM)
+    group, _, _ = make_service(tmp_path, FakeTelegram(), session=GROUP)
+    assert "switched off in chat -1001234567890" in owner.command("off -1001234567890")
+    assert owner.muted() == {"-1001234567890"}  # the direct chat itself stays on
+    with pytest.raises(st.StickerError, match="'/stickers on -1001234567890' in a direct chat"):
+        group.send({"sticker": "😏"})
+    assert "switched on in chat -1001234567890" in owner.command("on -1001234567890")
+    assert group.send({"sticker": "😏"})["success"]
+    assert "were not off in chat -1001234567890" in owner.command("on -1001234567890")
+
+
+def test_switching_a_chat_by_id_is_refused_in_a_group(tmp_path):
+    group, _, _ = make_service(tmp_path, FakeTelegram(), session=GROUP)
+    note = group.mute_current_chat()["note"]
+    assert "'/stickers on -1001234567890' in a direct chat" in note
+    for command in ("on -1001234567890", "off -100777", "on nonsense"):
+        assert "direct chat" in group.command(command)
+    assert group.muted() == {"-1001234567890"}
+    assert "switched on in this chat" in group.command("on")  # the plain form still works where it arrives
+
+
+def test_malformed_chat_ids_are_refused(tmp_path):
+    owner, _, _ = make_service(tmp_path, FakeTelegram(), session=DM)
+    for bad in ("@mygroup", "abc", "-100abc", "--100", "0", "12.5", "1" * 25):
+        assert "is not a Telegram chat id" in owner.command(f"off {bad}")
+    assert owner.muted() == set()
+
+
+def test_status_lists_muted_chats_for_the_owner_only(tmp_path):
+    owner, _, _ = make_service(tmp_path, FakeTelegram(), session=DM)
+    owner.command("off -1001234567890")
+    owner.command("off -100777")
+    status = owner.command("")
+    assert "Stickers are off in 2 chat(s): -1001234567890, -100777." in status
+    assert "'/stickers on <chat id>' here switches one back on" in status
+    group, _, _ = make_service(tmp_path, FakeTelegram(), session=GROUP)
+    in_group = group.command("")
+    assert "-100777" not in in_group  # other chats' ids are not shown in a group
+    assert "'/stickers on -1001234567890' in a direct chat" in in_group
+
+
+def test_note_after_a_sticker_says_it_is_the_whole_reply(tmp_path):
+    note = make_service(tmp_path, FakeTelegram())[0].send({"sticker": "😏"})["note"]
+    assert "whole reply" in note and "'done'" in note and "'sent'" in note and "beyond the sticker" in note
+    assert len(note) < 220  # one or two short sentences

@@ -68,8 +68,10 @@ def register(ctx) -> None:
             check_fn=_has_token, requires_env=["TELEGRAM_BOT_TOKEN"], emoji=emoji,
         )
     ctx.register_command("stickers", _stickers_command,
-                         description="Sticker packs: status, sync, describe, off/on here, ban/unban, about",
-                         args_hint="[sync | describe [n] | off | on | ban <id> | unban <id> | about <id> <text>]")
+                         description="Sticker packs: status, sync, describe, off/on (here or by chat id), "
+                                     "ban/unban, about",
+                         args_hint="[sync | describe [n] | off [chat id] | on [chat id] | ban <id> | unban <id> "
+                                   "| about <id> <text>]")
     skill = Path(__file__).parent / "skills" / "sticker-etiquette" / "SKILL.md"
     if skill.exists():
         ctx.register_skill("sticker-etiquette", skill,
