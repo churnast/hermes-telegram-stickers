@@ -6,6 +6,27 @@ All notable changes to this project are written down here. The format is based o
 
 ## [Unreleased]
 
+## [0.1.2] (2026-10-05)
+
+### Added
+
+- Reactions: a built-in list of about forty common reactions ("facepalm", "eye roll", "thumbs up", "oh no") points each one to the emojis pack authors tag it with and to the words a description of such a sticker tends to use. Asking for a reaction finds a sticker even when no pack has its exact emoji and no description uses that word.
+- An emoji that no pack has falls back to the nearest one in feeling (🤦 to 🙄 or 😑). The send result names the emoji that was asked for in `instead_of`.
+- `/stickers describe again [n]` redoes descriptions made with an older prompt or taken from Hermes' cache, and `/stickers` shows how many are left. Descriptions you wrote with `/stickers about` are never redone.
+
+### Changed
+
+- Emojis match without skin tone, gender sign or variation selector: 🤦‍♀️, 🤦🏽 and 🤦 find the same stickers.
+- A word made of a described word and more, such as "facepalm" for a description with "face", counts as a partial match.
+- When nothing fits, the error and the `telegram_sticker_find` hint list the emojis the packs have, and the tool descriptions tell the agent to send the closest one.
+- The vision prompt asks what the sticker shows, the feeling and three to six reaction words, and passes the pack's emoji as a hint. The plugin now uses its own prompt rather than Hermes' sticker prompt.
+- When the best match was just sent in the chat, the next sticker that fits at least half as well goes out instead of a repeat.
+- Questions and ideas go to GitHub Discussions, linked from the issue form and CONTRIBUTING. Tests also run on macOS.
+
+### Fixed
+
+- In a live test the agent asked for "facepalm", then 🙃, then 🤦‍♀️, got nothing back each time and sent no sticker. All three find one in the same packs now.
+
 ## [0.1.1] (2026-10-05)
 
 ### Added
@@ -37,6 +58,7 @@ First public release.
 - Pacing: about one sticker per 8 messages and a 20 second cooldown per chat, kept across restarts; the last five stickers sent in a chat are not repeated.
 - Bundled `sticker-etiquette` skill.
 
-[Unreleased]: https://github.com/churnast/hermes-telegram-stickers/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/churnast/hermes-telegram-stickers/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/churnast/hermes-telegram-stickers/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/churnast/hermes-telegram-stickers/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/churnast/hermes-telegram-stickers/releases/tag/v0.1.0

@@ -24,9 +24,10 @@ A sticker is a person's quick reaction, not another way to deliver an answer.
 ## How
 
 1. Pick the feeling first, then say it in a few English words: "cat rolling eyes", "thumbs up",
-   "sleepy", "facepalm". `telegram_sticker_send` with those words picks the best-described sticker.
-2. No description fits, or the packs are not described yet: use an emoji instead
-   (😏 smug, 🤣 laughing, 🙄 eye roll, 😢 sad, 🔥 impressed).
+   "sleepy", "facepalm". `telegram_sticker_send` with those words picks the best match by
+   description and by the emojis that usually go with that reaction.
+2. Or pass one emoji (😏 smug, 🤣 laughing, 🙄 eye roll, 😢 sad, 🔥 impressed). If no pack has it,
+   the nearest emoji in feeling is used.
 3. Unsure what exists: `telegram_sticker_find` without arguments lists packs and emojis;
    with `query` it shows matching stickers and what each one shows (`about`).
 4. The sticker replies to the message you are answering, in the same topic. Do not write
@@ -43,5 +44,6 @@ A sticker is a person's quick reaction, not another way to deliver an answer.
 - "not in a Telegram chat": stickers only work in Telegram turns.
 - "No sticker packs are configured": tell the owner to add pack names in the plugin settings.
 - "switched stickers off in this chat": the owner muted stickers here. Answer in words.
-- "No sticker description fits": try other words or an emoji. If nothing is described yet, the
-  owner can run `/stickers describe`.
+- "No sticker fits" or "No sticker for": the message lists the emojis the packs have. Send the
+  closest one once; if it fails again, answer in words. If nothing is described yet, the owner
+  can run `/stickers describe`.

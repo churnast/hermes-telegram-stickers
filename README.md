@@ -33,7 +33,7 @@ plugins:
 Then, in your Telegram chat with the bot:
 
 1. `/stickers` shows the packs it loaded.
-2. `/stickers describe` lets your vision model describe up to 30 stickers per run, so the agent can pick by meaning. Run it again for the next batch.
+2. `/stickers describe` lets your vision model describe up to 30 stickers per run, so the agent can pick by meaning. Repeat it for the next batch.
 3. Talk as usual. When a sticker fits better than words, the agent sends one.
 
 Any public sticker set works; you do not need to own it.
@@ -42,10 +42,10 @@ Any public sticker set works; you do not need to own it.
 
 | Kind | Name | What it does |
 |---|---|---|
-| Tool | `telegram_sticker_send` | Sends one sticker to the current chat: by a few words ("cat rolling eyes"), by emoji, or by exact id. Replies to the message being answered, in its topic. |
+| Tool | `telegram_sticker_send` | Sends one sticker to the current chat: by a few words ("cat rolling eyes"), a reaction ("facepalm"), an emoji, or an exact id. Replies to the message being answered, in its topic. |
 | Tool | `telegram_sticker_find` | Lists your packs and their emojis, or finds stickers by words or emoji, with a short description of each. |
 | Tool | `telegram_sticker_mute` | Switches stickers off in the current chat as soon as someone asks. Only you can switch them back on, with `/stickers on <chat id>` in a direct chat with the bot. |
-| Command | `/stickers` | Status (in a direct chat, with the chats where stickers are off), `sync`, `describe [n]`, `off` / `on` for this chat, `off` / `on <chat id>` for any chat from a direct chat, `ban` / `unban <id>`, `about <id> <text>`. |
+| Command | `/stickers` | Status (in a direct chat, with the chats where stickers are off), `sync`, `describe [again] [n]`, `off` / `on` for this chat, `off` / `on <chat id>` for any chat from a direct chat, `ban` / `unban <id>`, `about <id> <text>`. |
 | Skill | `telegram-stickers:sticker-etiquette` | When a sticker fits and when words are better. |
 
 On Hermes 0.21 and newer, plugin tools may sit behind the tool-search bridge (`tool_search`, `tool_describe`, `tool_call`), so the agent does not see them until it looks. The bundled skill tells it to call `telegram_sticker_send` and `telegram_sticker_find` through `tool_call` directly, which saves a search and a schema lookup before each sticker.
@@ -55,8 +55,11 @@ On Hermes 0.21 and newer, plugin tools may sit behind the tool-search bridge (`t
 A Telegram sticker carries one emoji and nothing else, so an emoji alone is a blunt tool: the same 😂 can be a laughing cat or a crying frog. The plugin keeps a one-sentence description of each sticker and matches the agent's words against it.
 
 - **Free first.** Hermes already describes static stickers that people send to the bot and keeps those descriptions in `sticker_cache.json`. They are reused at no cost.
-- **The rest on request.** `/stickers describe` sends each remaining sticker, once, to the vision model you configured in Hermes. Animated and video stickers are described from their still preview, which Hermes itself skips. A sticker that fails twice is not retried.
+- **The rest on request.** `/stickers describe` sends each remaining sticker, once, to the vision model you configured in Hermes. The description says what the sticker shows and ends with a few reaction words ("facepalm", "eye roll"); the pack's emoji goes along as a hint. Animated and video stickers are described from their still preview, which Hermes itself skips. A sticker that fails twice is not retried.
+- **Reactions, not only pictures.** Agents tend to ask for a reaction rather than a picture. A built-in list of about forty common reactions points each one to the emojis pack authors tag it with and to the words its description is likely to use, so "facepalm" finds a 🙄 sticker in packs that have no 🤦.
+- **Forgiving emojis.** 🤦‍♀️, 🤦🏽 and 🤦 count as one emoji. An emoji no pack has falls back to the nearest feeling, and when nothing fits at all, the error lists the emojis your packs have, so the agent tries the closest one instead of giving up.
 - **You have the last word.** `/stickers about pack:12 sleepy cat under a blanket` replaces a description, and `/stickers ban pack:12` takes a sticker out of use.
+- **Better descriptions after an update.** `/stickers describe again` redoes descriptions made with an older prompt or taken from Hermes' cache, one batch at a time. Your own `about` texts are never redone.
 - **No repeats.** The last five stickers sent in a chat are skipped when another one fits.
 
 ## Pacing and manners
@@ -90,7 +93,7 @@ A complete example is in [`config.example.yaml`](config.example.yaml).
 ## Privacy and safety
 
 - **Network.** Calls the Telegram Bot API (`api.telegram.org`, or your `api_base`) with the gateway's `TELEGRAM_BOT_TOKEN`: `getStickerSet` for each configured pack (at most once a week, on `/stickers sync`, or when the token changes), `sendSticker` when the agent sends one, and `getFile` plus a file download for each sticker that `/stickers describe` processes. No other hosts.
-- **Vision model.** Used only by `/stickers describe`, which you start. Each sticker image, or its still preview, is saved to a temporary file, passed to Hermes' own vision call (and so to the vision provider you configured), then deleted. The vision model gets the image, never a link with the token in it.
+- **Vision model.** Used only by `/stickers describe` and `/stickers describe again`, which you start. Each sticker image, or its still preview, is saved to a temporary file, passed to Hermes' own vision call (and so to the vision provider you configured), then deleted. The vision model gets the image, never a link with the token in it.
 - **Files** in `<HERMES_HOME>/plugin-data/telegram-stickers/`: `catalog.json` (pack titles, emojis, Telegram file ids), `descriptions.json` (one sentence per sticker), `state.json` (muted chats, banned stickers, the last stickers sent per chat) and `tmp/` (images being described, removed right away). Reads Hermes' `sticker_cache.json` to reuse its descriptions.
 - **Credentials.** Reads `TELEGRAM_BOT_TOKEN` from the environment. Never writes or logs it, and never puts it in an error message.
 - No hooks, no background processes, no shell commands, no telemetry.
@@ -101,7 +104,7 @@ A complete example is in [`config.example.yaml`](config.example.yaml).
 |---|---|
 | "No sticker packs are configured" | Add `packs` to the plugin settings and restart the gateway. |
 | A pack shows "not loaded (STICKERSET_INVALID)" | Check the short name: it is the part after `t.me/addstickers/`. |
-| "No sticker description fits" | Run `/stickers describe`, or let the agent use an emoji. |
+| "No sticker fits" | The error lists the emojis your packs have, and the agent should send the closest one. Run `/stickers describe` (after an update, `/stickers describe again`) so descriptions carry reaction words. |
 | "the vision model gave no description" | Configure a vision model in Hermes (`hermes setup`), then run `/stickers describe` again. |
 | The agent never sends stickers | Check that `/stickers` says they are on in this chat and that the plugin is enabled. |
 | Stickers stay off in a group | Send `/stickers` to the bot in a direct chat to see the muted chats, then `/stickers on <chat id>` there. |

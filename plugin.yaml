@@ -1,5 +1,5 @@
 name: telegram-stickers
-version: 0.1.1
+version: 0.1.2
 manifest_version: 2
 description: "Lets the agent answer with stickers from its owner's own Telegram sticker packs: picks by meaning or emoji, replies in the current chat and forum topic, avoids repeats, with a per-chat cooldown and an off switch."
 author: "churnast"
@@ -37,7 +37,7 @@ config_schema:
     type: int
     default: 30
     label: "Stickers per /stickers describe"
-    description: "How many stickers one '/stickers describe' run sends to the vision model (one image each)."
+    description: "How many stickers one '/stickers describe' (or 'describe again') run sends to the vision model, one image each."
   allow_other_chats:
     type: bool
     default: false

@@ -1,6 +1,7 @@
 # Contributing
 
-Thanks for taking the time to help. Issues and pull requests are welcome.
+Thanks for taking the time to help. Issues and pull requests are welcome; for questions and ideas, use
+[Discussions](https://github.com/churnast/hermes-telegram-stickers/discussions).
 
 ## Before you start
 

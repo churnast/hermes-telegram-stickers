@@ -21,10 +21,11 @@ jobs:
       - run: ruff check .
 
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7

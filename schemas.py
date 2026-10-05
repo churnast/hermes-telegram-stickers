@@ -5,17 +5,18 @@ FIND = {
     "description": (
         "Look up stickers in the owner's Telegram sticker packs. With no arguments it lists the "
         "packs, which emojis they cover and how many stickers have a description. With query "
-        "(a few English words about the picture, e.g. 'cat facepalm', 'sleepy', 'thumbs up') it "
-        "returns the best-described matches; with an emoji (e.g. 😏) it returns stickers tagged "
-        "with it. Results carry ids like 'pack_name:12' and, when known, 'about': what the "
-        "sticker shows. You can also skip this and pass words or an emoji straight to "
-        "telegram_sticker_send."
+        "(a few English words about the picture or the reaction, e.g. 'cat facepalm', 'sleepy', "
+        "'thumbs up', 'eye roll') it returns the best matches by description and reaction; with an "
+        "emoji (e.g. 😏) it returns stickers tagged with it, or with the nearest emoji in feeling "
+        "when no pack has it. When nothing fits, the hint lists the emojis the packs have. Results "
+        "carry ids like 'pack_name:12' and, when known, 'about': what the sticker shows. You can "
+        "also skip this and pass words or an emoji straight to telegram_sticker_send."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "query": {"type": "string",
-                      "description": "A few English words about the picture you want, e.g. 'cat facepalm'."},
+                      "description": "A few English words about the picture or reaction, e.g. 'cat facepalm'."},
             "emoji": {"type": "string", "description": "One emoji to match, e.g. 😏 or 🤣."},
             "pack": {"type": "string", "description": "Limit the search to one pack (short name)."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
@@ -29,10 +30,12 @@ SEND = {
     "name": "telegram_sticker_send",
     "description": (
         "Send one sticker in the current Telegram chat, as a reply to the message you are "
-        "answering and in the same forum topic. Pass a few English words describing the picture "
-        "('dog rolling eyes'), an emoji (a random sticker tagged with it) or an exact id from "
-        "telegram_sticker_find. Stickers sent recently in the chat are skipped when another one "
-        "fits. Use it the way a person would: instead of a short emotional reply ('haha', 'oh no', "
+        "answering and in the same forum topic. Pass a few English words about the picture or the "
+        "reaction ('dog rolling eyes', 'facepalm'), an emoji (a random sticker tagged with it, or "
+        "with the nearest emoji in feeling) or an exact id from telegram_sticker_find. If nothing "
+        "fits, the error lists the emojis the packs have: send the closest one once, or answer in "
+        "words. Stickers sent recently in the chat are skipped when another one fits. Use it the "
+        "way a person would: instead of a short emotional reply ('haha', 'oh no', "
         "'nice try'), never instead of a real answer, at most one every few messages, never to "
         "someone who is upset. After sending, do not describe the sticker in text. To put an emoji "
         "reaction on a message without sending a new one, use send_message with action='react' instead."
@@ -41,7 +44,8 @@ SEND = {
         "type": "object",
         "properties": {
             "sticker": {"type": "string",
-                        "description": "Words about the picture ('sleepy cat'), an emoji such as 😏, "
+                        "description": "Words about the picture or reaction ('sleepy cat', 'facepalm'), "
+                                       "an emoji such as 😏, "
                                        "or an id like 'pack_name:12'."},
             "reply": {"type": "boolean", "default": True,
                       "description": "Reply to the message being answered (default). False sends it unanchored."},

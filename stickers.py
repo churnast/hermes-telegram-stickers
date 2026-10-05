@@ -38,9 +38,15 @@ MAX_DESCRIBE_TRIES = 2
 RECENT_PER_CHAT = 5
 MAX_FILE_BYTES = 2_000_000
 ABOUT_CHARS = 140
-VARIATION_SELECTOR = "️"
-STICKER_PROMPT = ("Describe this sticker in one or two sentences. Focus on what it depicts: "
-                  "character, action, emotion. Be concise and objective.")
+VARIATION_SELECTOR = "\ufe0f"
+ZWJ = "\u200d"
+GENDER_SIGNS = frozenset({"\u2640", "\u2642"})  # ♀ ♂
+EMOJI_HINT_LIMIT = 80
+PROMPT_VERSION = 2  # descriptions made with an older prompt are redone by '/stickers describe again'
+STICKER_PROMPT = ("Describe this sticker in one or two short sentences: who is in it, what they are doing "
+                  "and the feeling it shows. Then write 'Reactions:' and three to six words or short "
+                  "phrases people would use for it in a chat, such as laughing, facepalm, eye roll, "
+                  "thumbs up, shocked, love, sleepy.")
 DIRECT_CHAT_TYPES = {"", "dm", "direct", "private", "im"}
 ADDSTICKERS_PREFIXES = (
     "https://t.me/addstickers/",
@@ -57,6 +63,13 @@ class StickerError(Exception):
 def normalize_emoji(value: str) -> str:
     """Drop the emoji variation selector so that '❤️' and '❤' match."""
     return (value or "").replace(VARIATION_SELECTOR, "").strip()
+
+
+def emoji_key(value: str) -> str:
+    """The emoji without variation selectors, skin tone or gender sign, so that '🤦🏽‍♀️', '🤦‍♂' and '🤦'
+    find the same stickers."""
+    text = "".join(ch for ch in (value or "") if ch not in "\ufe0e\ufe0f" and not 0x1F3FB <= ord(ch) <= 0x1F3FF)
+    return ZWJ.join(part for part in text.split(ZWJ) if part not in GENDER_SIGNS).strip()
 
 
 def pack_name(value: str) -> str:
@@ -226,8 +239,36 @@ def all_stickers(catalog: dict[str, Any], packs: list[str], pack: str = "") -> I
 
 def matches(catalog: dict[str, Any], packs: list[str], emoji: str = "",
             pack: str = "") -> list[tuple[str, dict[str, Any]]]:
-    wanted = normalize_emoji(emoji)
-    return [(name, s) for name, s in all_stickers(catalog, packs, pack) if not wanted or s["emoji"] == wanted]
+    wanted = emoji_key(emoji)
+    return [(name, s) for name, s in all_stickers(catalog, packs, pack)
+            if not wanted or emoji_key(s["emoji"]) == wanted]
+
+
+def closest(catalog: dict[str, Any], packs: list[str], emoji: str,
+            pack: str = "") -> list[tuple[str, dict[str, Any]]]:
+    """Stickers for the emoji nearest in feeling to one the packs do not have: 🤦 falls back to 🙄 or 😑."""
+    wanted = emoji_key(emoji)
+    for group in _NEIGHBOURS.get(wanted, []):
+        for other in group:
+            found = matches(catalog, packs, emoji=other, pack=pack) if other != wanted else []
+            if found:
+                return found
+    return []
+
+
+def available_emojis(catalog: dict[str, Any], packs: list[str]) -> str:
+    """The emojis that have stickers, in pack order, for an error the model can act on."""
+    seen: list[str] = []
+    for _, sticker in all_stickers(catalog, packs):
+        if sticker.get("emoji") and sticker["emoji"] not in seen:
+            seen.append(sticker["emoji"])
+    return "".join(seen[:EMOJI_HINT_LIMIT]) + ("…" if len(seen) > EMOJI_HINT_LIMIT else "")
+
+
+def emoji_hint(catalog: dict[str, Any], packs: list[str]) -> str:
+    emojis = available_emojis(catalog, packs)
+    return (f"These emojis have stickers: {emojis}. Send the closest one, or answer in words." if emojis
+            else "The packs have no emoji tags: use words or an id from telegram_sticker_find.")
 
 
 def without(catalog: dict[str, Any], banned: set[str]) -> dict[str, Any]:
@@ -253,6 +294,13 @@ def description_of(descriptions: dict[str, Any], sticker: dict[str, Any]) -> str
     return str(entry.get("text") or "") if isinstance(entry, dict) else ""
 
 
+def outdated(entry: dict[str, Any]) -> bool:
+    """A machine-made description without reaction words: an older prompt of ours or Hermes' cache.
+    The owner's own descriptions are never redone."""
+    return (bool(entry.get("text")) and entry.get("source") in ("vision", "hermes")
+            and int(entry.get("prompt") or 1) < PROMPT_VERSION)
+
+
 def _words(text: str) -> list[str]:
     return [w for w in _WORD.findall((text or "").lower()) if len(w) > 2 and w not in _STOP]
 
@@ -261,18 +309,131 @@ def _stem(word: str) -> str:
     return word[:max(4, len(word) - 3)] if len(word) > 5 else word
 
 
+# --- Reactions --------------------------------------------------------------------------------
+
+# Reactions a model tends to ask for: the words it may use (two-word ones written together, 'thumbsup'),
+# the emojis pack authors tag such stickers with (closest first) and words a description of such a sticker
+# tends to contain. They let 'facepalm' find a 🙄 sticker in packs without 🤦, and let an emoji the packs
+# do not have fall back to the nearest feeling.
+REACTION_GROUPS: tuple[tuple[str, str, str], ...] = (
+    ("facepalm smh ugh", "🤦 🙄 😑 😩 😒 🤷",
+     "face hands palm palms embarrassed frustrated exasperated whatever unimpressed"),
+    ("laugh laughing lol lmao haha hahaha funny hilarious rofl", "😂 🤣 😆 😹 😄 😁",
+     "laughing laughs laugh giggling tears joy"),
+    ("cry crying sad tears sob sobbing upset", "😭 😢 😿 🥺 😞 ☹", "crying cries tears teary sad weeping wailing"),
+    ("love heart adore", "❤ 😍 🥰 😘 💕 💖 💘", "heart hearts love loving affectionate"),
+    ("kiss kisses", "😘 😗 😚 💋", "kiss kissing kisses lips"),
+    ("hug hugs cuddle", "🤗 🫂 🥰", "hug hugging hugs embrace cuddling"),
+    ("angry mad rage furious annoyed", "😡 😠 🤬 👿 😤", "angry rage furious glaring frustration"),
+    ("shock shocked surprise surprised wow omg ohno", "😱 😮 😲 😳 🤯 😯",
+     "shock shocked surprise surprised startled stunned"),
+    ("scared afraid fear frightened", "😨 😱 😰 😧", "scared frightened fear afraid startled"),
+    ("cool confident chill", "😎 🆒 🤙", "sunglasses cool confident"),
+    ("think thinking hmm wonder", "🤔 🧐 🤨", "thinking pondering curious chin"),
+    ("sleep sleepy tired goodnight night bed", "😴 💤 🥱 😪 🛌", "sleeping asleep sleepy tired yawning bed zzz"),
+    ("party celebrate celebration congrats congratulations birthday yay", "🥳 🎉 🎊 🍾 🎂",
+     "party celebrating celebration confetti festive"),
+    ("yes agree okay ok approve thumbsup nice", "👍 👌 ✅ 🆗 💯", "thumbs approving approval okay"),
+    ("no nope disagree dislike thumbsdown", "👎 🙅 ❌ 🚫", "thumbs disapproving refusing"),
+    ("hi hello hey wave greeting bye goodbye", "👋 🙋 🤚", "waving waves wave greeting hello"),
+    ("thanks thank please pray hope", "🙏 🤲", "praying hands grateful pleading"),
+    ("clap applause bravo", "👏 🙌", "clapping applause cheering"),
+    ("fire lit amazing awesome", "🔥 💯 🤩", "fire flame flames excited"),
+    ("shrug whatever dunno idk", "🤷 🙄 😐", "shrugging shrug confused unsure"),
+    ("eyeroll eyerolling rollingeyes", "🙄 😒 😑", "rolling eyes unimpressed whatever"),
+    ("smug sly mischievous evil", "😏 😈 🤭", "smug smirk smirking mischievous sly"),
+    ("sarcasm sarcastic irony ironic", "🙃 😏 🙄", "sarcastic smirk smirking ironic"),
+    ("nervous awkward sweat oops", "😅 😬 🫠 😓 🙃", "nervous awkward sweating sheepish"),
+    ("confused puzzled", "😕 🤨 😵 🤔", "confused puzzled"),
+    ("money rich cash", "🤑 💰 💸 💵", "money dollar cash rich"),
+    ("strong muscle power", "💪 🏋", "strong muscles flexing"),
+    ("sick ill nausea", "🤢 🤮 🤒 😷 🦠", "sick ill nausea vomiting"),
+    ("cold freezing", "🥶 ❄", "cold freezing snow"),
+    ("hungry food yum delicious", "😋 🤤 🍕 🍔", "eating food hungry delicious"),
+    ("coffee", "☕", "coffee cup mug"),
+    ("popcorn drama", "🍿 👀", "popcorn watching"),
+    ("look watching eyes", "👀 🧐", "eyes watching looking"),
+    ("work working laptop computer coding", "👨‍💻 💻 🧑‍💻 ⌨", "laptop computer working typing"),
+    ("quiet secret shh", "🤫 🤐", "quiet finger lips secret"),
+    ("pleading puppy beg", "🥺 🙏", "pleading puppy begging teary"),
+    ("happy joy glad smile", "😊 😄 😁 🙂 😃", "happy smiling cheerful joyful"),
+    ("bored boring meh", "😑 😐 🥱", "bored unimpressed expressionless"),
+    ("travel flight airport plane trip vacation", "✈ 🧳 🏖", "plane airport travel suitcase"),
+    ("dance dancing", "💃 🕺 👯", "dancing dance"),
+    ("mindblown crazy", "🤯 🤪", "exploding mind crazy"),
+)
+
+Reaction = tuple[tuple[str, ...], frozenset[str]]
+
+
+def _build_reactions() -> tuple[dict[str, Reaction], dict[str, list[tuple[str, ...]]]]:
+    by_word: dict[str, Reaction] = {}
+    by_emoji: dict[str, list[tuple[str, ...]]] = {}
+    for words, emojis, cues in REACTION_GROUPS:
+        keys = tuple(emoji_key(e) for e in emojis.split())
+        for word in words.split():
+            by_word.setdefault(word, (keys, frozenset(cues.split())))
+        for key in keys:
+            by_emoji.setdefault(key, []).append(keys)
+    return by_word, by_emoji
+
+
+_REACTIONS, _NEIGHBOURS = _build_reactions()
+
+
+def _reaction(token: str) -> Reaction | None:
+    return _REACTIONS.get(token) or (_REACTIONS.get(token[:-1]) if token.endswith("s") else None)
+
+
+def reactions_in(query: str) -> list[Reaction]:
+    """Reactions named in a query, also as two words ('thumbs up', 'eye roll', 'face-palm')."""
+    tokens = _WORD.findall((query or "").lower())
+    found: list[Reaction] = []
+    used: set[int] = set()
+    for i in range(len(tokens) - 1):
+        entry = _reaction(tokens[i] + tokens[i + 1])
+        if entry:
+            used.update((i, i + 1))
+            if entry not in found:
+                found.append(entry)
+    for i, token in enumerate(tokens):
+        entry = None if i in used else _reaction(token)
+        if entry and entry not in found:
+            found.append(entry)
+    return found
+
+
+def _is_compound_of(word: str, described: set[str]) -> bool:
+    """'facepalm' starts with 'face', 'eyeroll' ends with 'roll': a described word of four letters or more
+    at either end of a longer word, with at least three letters left over ('flight' is not 'light')."""
+    return any(len(part) >= 4 and len(word) - len(part) >= 3 and (word.startswith(part) or word.endswith(part))
+               for part in described)
+
+
 def relevance(query: str, sticker: dict[str, Any], description: str) -> int:
-    """How well a sticker fits a few words: whole words count double, word stems once,
-    and an emoji in the query that equals the sticker's emoji adds two. 0 means no match."""
+    """How well a sticker fits a few words. 0 means no match.
+
+    Whole words in the description count two, word stems and parts of a compound word ('face' in
+    'facepalm') one, an emoji in the query that equals the sticker's emoji two. A reaction named in the
+    query ('facepalm', 'thumbs up') adds three for the emoji pack authors use for it most, two for a
+    related emoji, and one for each of up to two words such stickers are usually described with."""
     text = (description or "").lower()
+    described = set(_words(text))
     score = 0
     for word in _words(query):
         if re.search(rf"\b{re.escape(word)}\b", text):
             score += 2
-        elif _stem(word) in text:
+        elif _stem(word) in text or _is_compound_of(word, described):
             score += 1
-    if sticker.get("emoji") and sticker["emoji"] in normalize_emoji(query):
+    key = emoji_key(sticker.get("emoji", ""))
+    if key and key in emoji_key(query):
         score += 2
+    for emojis, cues in reactions_in(query):
+        if key and key == emojis[0]:
+            score += 3
+        elif key and key in emojis:
+            score += 2
+        score += min(2, len(cues & described))
     return score
 
 
@@ -326,17 +487,24 @@ def _run_coroutine(coro: Any) -> Any:
     return box.get("value")
 
 
-def vision_describe(image: Path) -> str:
-    """One or two sentences about a sticker from Hermes' auxiliary vision model: the same call
-    the Telegram adapter makes for stickers that people send to the bot."""
+def sticker_prompt(sticker: dict[str, Any]) -> str:
+    """The vision prompt for one sticker: the pack's emoji is a strong hint about the intended reaction,
+    and an animated sticker is judged from a single still frame."""
+    prompt = STICKER_PROMPT
+    if sticker.get("emoji"):
+        prompt += f" Its pack tags it with {sticker['emoji']}, a hint about the intended feeling."
+    if sticker.get("kind", "static") != "static":
+        prompt += " The image is one frame of an animated sticker."
+    return prompt
+
+
+def vision_describe(image: Path, prompt: str = STICKER_PROMPT) -> str:
+    """One or two sentences about a sticker, with reaction words, from Hermes' auxiliary vision model:
+    the same tool the Telegram adapter uses for stickers that people send to the bot."""
     try:
         from tools.vision_tools import vision_analyze_tool  # type: ignore
     except Exception:
         raise StickerError("this Hermes has no vision tool") from None
-    try:
-        from gateway.sticker_cache import STICKER_VISION_PROMPT as prompt  # type: ignore
-    except Exception:
-        prompt = STICKER_PROMPT
     raw = _run_coroutine(vision_analyze_tool(image_url=str(image), user_prompt=prompt))
     result = json.loads(raw) if isinstance(raw, str) else (raw or {})
     text = str(result.get("analysis") or "").strip()
@@ -351,8 +519,9 @@ def vision_describe(image: Path) -> str:
 def pick(catalog: dict[str, Any], packs: list[str], wanted: str, rng: random.Random,
          descriptions: dict[str, Any] | None = None,
          avoid: Iterable[str] = ()) -> tuple[str, dict[str, Any]]:
-    """'pack:12' picks one exact sticker; words pick the best-described match; an emoji picks at
-    random, favouring earlier packs. Stickers sent recently in the chat are skipped when possible."""
+    """'pack:12' picks one exact sticker; words pick the best match by description and reaction; an emoji
+    picks at random, favouring earlier packs, and falls back to the nearest feeling when no pack has it.
+    Stickers sent recently in the chat are skipped when possible."""
     wanted = (wanted or "").strip()
     avoid = set(avoid)
     if not wanted:
@@ -370,15 +539,19 @@ def pick(catalog: dict[str, Any], packs: list[str], wanted: str, rng: random.Ran
         if not ranked:
             extra = ("" if descriptions else
                      " No sticker has a description yet: the owner adds them with /stickers describe.")
-            raise StickerError(f"No sticker description fits '{wanted}'. Try other words or an emoji.{extra}")
-        best = [(n, s) for score, n, s in ranked if score == ranked[0][0]]
-        fresh = [item for item in best if sticker_id(*item) not in avoid] or best
-        return rng.choice(fresh)
+            raise StickerError(f"No sticker fits '{wanted}'. {emoji_hint(catalog, packs)}{extra}")
+        top = ranked[0][0]
+        best = [(n, s) for score, n, s in ranked if score == top]
+        fresh = [item for item in best if sticker_id(*item) not in avoid]
+        if fresh:
+            return rng.choice(fresh)
+        # the best ones were just sent: the next one that fits at least half as well, else a repeat
+        good = [(n, s) for score, n, s in ranked if score * 2 >= top and sticker_id(n, s) not in avoid]
+        return good[0] if good else rng.choice(best)
 
-    found = matches(catalog, packs, emoji=wanted)
+    found = matches(catalog, packs, emoji=wanted) or closest(catalog, packs, wanted)
     if not found:
-        raise StickerError(f"No sticker for {wanted} in the configured packs. "
-                           "Call telegram_sticker_find without arguments to see which emojis exist.")
+        raise StickerError(f"No sticker for {wanted} in the configured packs. {emoji_hint(catalog, packs)}")
     fresh = [item for item in found if sticker_id(*item) not in avoid] or found
     weights = [len(packs) - packs.index(n) for n, _ in fresh]
     return rng.choices(fresh, weights=weights, k=1)[0]
@@ -471,7 +644,7 @@ class StickerService:
                  clock: Callable[[], float] = time.time,
                  rng: random.Random | None = None,
                  session: Callable[[], dict[str, str]] = current_session,
-                 describer: Callable[[Path], str] = vision_describe,
+                 describer: Callable[[Path, str], str] = vision_describe,
                  hermes_descriptions: Callable[[], dict[str, str]] = hermes_sticker_descriptions) -> None:
         self._get_config = get_config
         self._data_dir = data_dir or default_data_dir
@@ -567,8 +740,9 @@ class StickerService:
                 save_json(self._data_dir() / DESCRIPTIONS_FILE, descriptions)
         return added
 
-    def describe(self, limit: int | None = None) -> dict[str, Any]:
-        """Describe stickers that have no description yet with the vision model, up to `limit`."""
+    def describe(self, limit: int | None = None, again: bool = False) -> dict[str, Any]:
+        """Describe stickers that have no description yet with the vision model, up to `limit`. With
+        `again`, redo descriptions made with an older prompt (or taken from Hermes' cache) instead."""
         if not self._describing.acquire(blocking=False):
             raise StickerError("a description run is already going; try again when it finishes")
         try:
@@ -585,7 +759,9 @@ class StickerService:
                 if not sticker.get("uid"):
                     return False
                 if not isinstance(entry, dict):
-                    return True
+                    return not again
+                if again:
+                    return outdated(entry) and int(entry.get("redo_tries") or 0) < MAX_DESCRIBE_TRIES
                 return not entry.get("text") and int(entry.get("tries") or 0) < MAX_DESCRIBE_TRIES
 
             todo = [(n, s) for n, s in all_stickers(without(catalog, self.banned()), self.packs()) if wanted(s)]
@@ -604,16 +780,19 @@ class StickerService:
                     image = tmp_dir / f"{sticker['uid']}{ext}"
                     image.parent.mkdir(parents=True, exist_ok=True)
                     image.write_bytes(data)
-                    text = self._describer(image)
+                    text = self._describer(image, sticker_prompt(sticker))
                 except Exception as exc:
                     problems.append(f"{sticker_id(name, sticker)}: {exc}")
                     failures_in_a_row += 1
                     with self._files_lock:  # a sticker that keeps failing is not retried forever
                         current = self.descriptions()
                         entry = current.get(sticker["uid"]) if isinstance(current.get(sticker["uid"]), dict) else {}
-                        current[sticker["uid"]] = {"text": "", "source": "failed",
-                                                   "tries": int(entry.get("tries") or 0) + 1,
-                                                   "at": round(self._clock())}
+                        if entry.get("text"):  # redoing: the old description stays
+                            current[sticker["uid"]] = {**entry, "redo_tries": int(entry.get("redo_tries") or 0) + 1}
+                        else:
+                            current[sticker["uid"]] = {"text": "", "source": "failed",
+                                                       "tries": int(entry.get("tries") or 0) + 1,
+                                                       "at": round(self._clock())}
                         save_json(self._data_dir() / DESCRIPTIONS_FILE, current)
                     if failures_in_a_row >= MAX_VISION_FAILURES:
                         problems.append("stopped after several failures in a row")
@@ -625,21 +804,25 @@ class StickerService:
                 failures_in_a_row = 0
                 with self._files_lock:
                     current = self.descriptions()
-                    current[sticker["uid"]] = {"text": text, "source": "vision", "at": round(self._clock())}
+                    current[sticker["uid"]] = {"text": text, "source": "vision", "prompt": PROMPT_VERSION,
+                                               "at": round(self._clock())}
                     save_json(self._data_dir() / DESCRIPTIONS_FILE, current)
                 described += 1
             counts = self.counts(catalog)
             return {"described": described, "from_hermes": from_hermes, "problems": problems,
                     "with_description": counts["described"], "total": counts["total"],
-                    "left": counts["total"] - counts["described"], "tried": tried}
+                    "left": counts["total"] - counts["described"], "outdated": counts["outdated"],
+                    "tried": tried, "again": again}
         finally:
             self._describing.release()
 
     def counts(self, catalog: dict[str, Any]) -> dict[str, int]:
         descriptions = self.descriptions()
         stickers = list(all_stickers(catalog, self.packs()))
+        entries = [descriptions.get(s.get("uid") or "") for _, s in stickers]
         return {"total": len(stickers),
-                "described": sum(1 for _, s in stickers if description_of(descriptions, s))}
+                "described": sum(1 for _, s in stickers if description_of(descriptions, s)),
+                "outdated": sum(1 for e in entries if isinstance(e, dict) and outdated(e))}
 
     # owner choices and per-chat pacing, kept across restarts
     def state(self) -> dict[str, Any]:
@@ -717,10 +900,14 @@ class StickerService:
                 "hint": ("Call again with an emoji, or with query='a few English words about the picture', "
                          "to get sticker ids; or send directly with telegram_sticker_send."),
             }
+        nearest = False
         if query:
             found = [(n, s) for _, n, s in search(catalog, packs, descriptions, query + " " + emoji, pack=pack)]
         else:
             found = matches(catalog, packs, emoji=emoji, pack=pack)
+            if not found and emoji:
+                found = closest(catalog, packs, emoji, pack=pack)
+                nearest = bool(found)
         out: dict[str, Any] = {"stickers": [], "total": len(found)}
         for name, sticker in found[:limit]:
             item = {"id": sticker_id(name, sticker), "emoji": sticker["emoji"], "kind": sticker["kind"],
@@ -729,10 +916,13 @@ class StickerService:
             if about:
                 item["about"] = about[:ABOUT_CHARS]
             out["stickers"].append(item)
-        if query and not found:
-            out["hint"] = ("No description matches these words. Try other words or an emoji."
-                           + ("" if descriptions else " No sticker has a description yet: the owner adds "
-                              "them with /stickers describe."))
+        if nearest:
+            out["hint"] = f"No sticker is tagged {emoji}; these carry the nearest emoji in feeling."
+        elif not found:
+            out["hint"] = (("No sticker fits these words. " if query else f"No sticker for {emoji}. ")
+                           + emoji_hint(catalog, packs)
+                           + ("" if descriptions or not query else " No sticker has a description yet: the "
+                              "owner adds them with /stickers describe."))
         return out
 
     def send(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -796,6 +986,9 @@ class StickerService:
         about = description_of(descriptions, sticker)
         if about:
             out["about"] = about[:ABOUT_CHARS]
+        wanted = str(args.get("sticker") or "").strip()
+        if not any(ch.isalnum() for ch in wanted) and emoji_key(sticker["emoji"]) != emoji_key(wanted):
+            out["instead_of"] = wanted  # no pack had that emoji: the nearest feeling went out
         return out
 
     def mute_current_chat(self) -> dict[str, Any]:
@@ -820,16 +1013,19 @@ class StickerService:
             if sub in ("describe", "ban", "unban", "about"):
                 self._require_direct_chat()
             if sub == "describe":
-                limit = int(words[1]) if len(words) > 1 and words[1].isdigit() else None
-                return self.describe_text(limit)
+                rest = words[1:]
+                again = bool(rest) and rest[0].lower() in ("again", "redo")
+                rest = rest[1:] if again else rest
+                limit = int(rest[0]) if rest and rest[0].isdigit() else None
+                return self.describe_text(limit, again=again)
             if sub in ("ban", "unban") and len(words) > 1:
                 return self.ban_text(words[1], banned=sub == "ban")
             if sub == "about" and len(words) > 2:
                 return self.about_text(words[1], " ".join(words[2:]))
         except StickerError as exc:
             return f"Stickers: {exc}"
-        return ("Usage: /stickers [sync | describe [n] | off [chat id] | on [chat id] | ban <id> | unban <id> "
-                "| about <id> <text>]")
+        return ("Usage: /stickers [sync | describe [again] [n] | off [chat id] | on [chat id] | ban <id> "
+                "| unban <id> | about <id> <text>]")
 
     def ban_text(self, wanted: str, banned: bool) -> str:
         name, sticker = self._resolve(wanted)
@@ -877,17 +1073,26 @@ class StickerService:
         if counts["described"] < counts["total"]:
             lines.append(f"'/stickers describe' lets the vision model describe up to {self.describe_batch()} more, "
                          "so the agent can pick stickers by meaning, not only by emoji.")
+        if counts["outdated"]:
+            lines.append(f"{counts['outdated']} description(s) have no reaction words (older prompt or Hermes' "
+                         f"cache): '/stickers describe again' redoes up to {self.describe_batch()}.")
         return "\n".join(lines)
 
-    def describe_text(self, limit: int | None = None) -> str:
-        result = self.describe(limit)
-        parts = [f"described {result['described']} with the vision model"]
-        if result["from_hermes"]:
-            parts.append(f"took {result['from_hermes']} from Hermes' own sticker cache")
-        lines = [f"Stickers: {', '.join(parts)}. {result['with_description']} of {result['total']} "
-                 f"now have a description."]
-        if result["left"]:
-            lines.append(f"{result['left']} left: run '/stickers describe' again for the next batch.")
+    def describe_text(self, limit: int | None = None, again: bool = False) -> str:
+        result = self.describe(limit, again=again)
+        if again:
+            lines = [f"Stickers: described {result['described']} again with reaction words. "
+                     f"{result['outdated']} older description(s) left."]
+            if result["outdated"] and result["tried"]:
+                lines.append("Run '/stickers describe again' for the next batch.")
+        else:
+            parts = [f"described {result['described']} with the vision model"]
+            if result["from_hermes"]:
+                parts.append(f"took {result['from_hermes']} from Hermes' own sticker cache")
+            lines = [f"Stickers: {', '.join(parts)}. {result['with_description']} of {result['total']} "
+                     f"now have a description."]
+            if result["left"]:
+                lines.append(f"{result['left']} left: run '/stickers describe' for the next batch.")
         for problem in result["problems"][:5]:
             lines.append(f"• {problem}")
         return "\n".join(lines)

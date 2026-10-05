@@ -84,7 +84,7 @@ class _Resp(io.BytesIO):
         return False
 
 
-def no_vision(path):
+def no_vision(path, prompt):
     raise st.StickerError("vision is not configured in this test")
 
 
@@ -210,7 +210,7 @@ def test_exact_id_and_unknown_id(tmp_path):
 
 def test_unknown_emoji_points_to_find(tmp_path):
     service, _, _ = make_service(tmp_path, FakeTelegram())
-    with pytest.raises(st.StickerError, match="telegram_sticker_find"):
+    with pytest.raises(st.StickerError, match="These emojis have stickers: 😏❤🤣\\. Send the closest"):
         service.send({"sticker": "🦄"})
 
 
@@ -290,10 +290,11 @@ def test_catalog_keeps_unique_ids_and_previews_and_resyncs_old_format(tmp_path):
 
 def test_describe_reuses_hermes_cache_then_asks_vision_with_a_local_file(tmp_path):
     fake = FakeTelegram()
-    seen = []
+    seen, prompts = [], []
 
-    def describer(path):
+    def describer(path, prompt):
         seen.append(path)
+        prompts.append(prompt)
         assert path.exists() and path.parent == tmp_path / "tmp"
         return f"picture from {path.name}"
 
@@ -308,10 +309,13 @@ def test_describe_reuses_hermes_cache_then_asks_vision_with_a_local_file(tmp_pat
     saved = json.loads((tmp_path / st.DESCRIPTIONS_FILE).read_text(encoding="utf-8"))
     assert saved["u-cat1"]["source"] == "hermes" and saved["u-cat2"]["source"] == "vision"
     assert result["with_description"] == 3 and result["left"] == 1
+    assert all("Reactions:" in q for q in prompts) and "tags it with ❤" in prompts[0]
+    assert "one frame of an animated sticker" in prompts[1] and "one frame" not in prompts[0]
+    assert saved["u-cat2"]["prompt"] == st.PROMPT_VERSION
 
 
 def test_describe_works_in_batches(tmp_path):
-    service, _, _ = make_service(tmp_path, FakeTelegram(), describer=lambda p: "a described picture")
+    service, _, _ = make_service(tmp_path, FakeTelegram(), describer=lambda p, q: "a described picture")
     first = service.describe(limit=1)
     assert first["described"] == 1 and first["left"] == 3
     second = service.describe(limit=1)
@@ -326,7 +330,7 @@ def test_describe_stops_after_repeated_vision_failures(tmp_path):
 
 
 def test_download_errors_never_contain_the_token(tmp_path):
-    service, _, _ = make_service(tmp_path, FakeTelegram(fail={"download": True}), describer=lambda p: "x")
+    service, _, _ = make_service(tmp_path, FakeTelegram(fail={"download": True}), describer=lambda p, q: "x")
     result = service.describe(limit=1)
     assert "HTTP 404" in result["problems"][0] and "TEST-TOKEN" not in " ".join(result["problems"])
 
@@ -339,7 +343,7 @@ def test_find_by_words_ranks_described_stickers(tmp_path):
     assert out["stickers"][0]["id"] == "memes:1" and out["stickers"][0]["about"] == "A dog laughing hard"
     assert service.find({"query": "hearts"})["stickers"][0]["id"] == "cats:2"
     empty = service.find({"query": "spaceship"})
-    assert empty["total"] == 0 and "No description matches" in empty["hint"]
+    assert empty["total"] == 0 and "No sticker fits" in empty["hint"] and "😏❤🤣" in empty["hint"]
     summary = service.find({})
     assert summary["packs"][0]["described"] == 2
 
@@ -443,7 +447,7 @@ def test_owner_can_ban_and_describe_stickers_in_a_direct_chat(tmp_path):
 def test_owner_descriptions_win_and_failures_are_not_retried_forever(tmp_path):
     calls = []
 
-    def failing(path):
+    def failing(path, prompt):
         calls.append(path.name)
         raise st.StickerError("vision is down")
 
@@ -545,3 +549,125 @@ def test_note_after_a_sticker_says_it_is_the_whole_reply(tmp_path):
     note = make_service(tmp_path, FakeTelegram())[0].send({"sticker": "😏"})["note"]
     assert "whole reply" in note and "'done'" in note and "'sent'" in note and "beyond the sticker" in note
     assert len(note) < 220  # one or two short sentences
+
+
+REACTION_SETS = {
+    "duck": {"title": "Duck", "stickers": [
+        {"file_id": "d1", "file_unique_id": "u-d1", "emoji": "😂"},
+        {"file_id": "d2", "file_unique_id": "u-d2", "emoji": "🙄"},
+        {"file_id": "d3", "file_unique_id": "u-d3", "emoji": "🤷‍♂️", "is_animated": True,
+         "thumbnail": {"file_id": "d3-thumb"}},
+        {"file_id": "d4", "file_unique_id": "u-d4", "emoji": "😱"},
+    ]},
+}
+
+
+def reaction_service(tmp_path, **kwargs):
+    fake = FakeTelegram(sets=REACTION_SETS)
+    config = {"packs": ["duck"], "cooldown_seconds": 0, "min_messages_between": 0}
+    service, now, _ = make_service(tmp_path, fake, config=config, **kwargs)
+    return service, fake
+
+
+def test_emoji_key_ignores_gender_skin_tone_and_selectors():
+    assert st.emoji_key("🤦🏽‍♀️") == st.emoji_key("🤦‍♂") == st.emoji_key("🤦") == "🤦"
+    assert st.emoji_key("❤️") == "❤" and st.emoji_key("👍🏻") == "👍"
+    assert st.emoji_key("👨‍💻") == "👨‍💻"  # other joined emojis stay whole
+
+
+def test_emoji_with_or_without_gender_finds_the_same_sticker(tmp_path):
+    service, _ = reaction_service(tmp_path)
+    for emoji in ("🤷", "🤷‍♀️", "🤷🏻‍♂️"):
+        assert [s["id"] for s in service.find({"emoji": emoji})["stickers"]] == ["duck:3"]
+
+
+def test_reaction_word_finds_a_related_emoji_without_descriptions(tmp_path):
+    service, fake = reaction_service(tmp_path)
+    sent = service.send({"sticker": "facepalm"})
+    assert sent["sticker"] == "duck:2" and fake.calls[-1][1]["sticker"] == "d2"  # 🙄: no pack has 🤦
+    assert service.find({"query": "lol"})["stickers"][0]["id"] == "duck:1"
+
+
+def test_two_word_reactions_and_hyphens():
+    approve = st.reactions_in("thumbs up")
+    assert approve and approve[0][0][0] == "👍"
+    assert st.reactions_in("eye-roll")[0][0][0] == "🙄"
+    oh_no = st.reactions_in("oh no")
+    assert len(oh_no) == 1 and oh_no[0][0][0] == "😱"  # not the 👎 of a lone "no"
+
+
+def test_parts_of_a_compound_word_match_a_description():
+    sticker = {"emoji": "😱"}
+    assert st.relevance("facepalm", {"emoji": ""}, "A duck holds its face in its hands") > 0
+    assert st.relevance("eyeroll", {"emoji": ""}, "A duck about to roll") > 0
+    assert st.relevance("flight", {"emoji": ""}, "A light-gray cat") == 0  # a part, not a word inside
+    assert st.relevance("facepalm", sticker, "A duck holds its face in its hands") > \
+        st.relevance("facepalm", sticker, "A duck standing in the rain")
+
+
+def test_missing_emoji_falls_back_to_the_nearest_feeling(tmp_path):
+    service, fake = reaction_service(tmp_path)
+    sent = service.send({"sticker": "🤦‍♀️"})
+    assert sent["sticker"] == "duck:2" and sent["instead_of"] == "🤦‍♀️"
+    found = service.find({"emoji": "🤦"})
+    assert [s["id"] for s in found["stickers"]] == ["duck:2"] and "nearest emoji" in found["hint"]
+    assert "instead_of" not in service.send({"sticker": "😂"})
+
+
+def test_nothing_fits_lists_the_emojis_that_exist(tmp_path):
+    service, _ = reaction_service(tmp_path)
+    write_descriptions(tmp_path, u_d1="A duck laughing")
+    with pytest.raises(st.StickerError, match="These emojis have stickers: 😂🙄🤷‍♂😱"):
+        service.send({"sticker": "spaceship"})
+    with pytest.raises(st.StickerError, match="These emojis have stickers"):
+        service.send({"sticker": "🦄"})
+    assert "😂🙄🤷‍♂😱" in service.find({"emoji": "🦄"})["hint"]
+
+
+def test_best_sticker_just_sent_gives_way_to_the_next_good_one(tmp_path):
+    service, _ = reaction_service(tmp_path)
+    write_descriptions(tmp_path, u_d2="A duck rolling its eyes", u_d4="A duck holding its face in its hands")
+    first = service.send({"sticker": "facepalm"})["sticker"]
+    second = service.send({"sticker": "facepalm"})["sticker"]
+    assert {first, second} == {"duck:2", "duck:4"}
+
+
+DM_SESSION = {"platform": "telegram", "chat_id": "555", "thread_id": "", "message_id": "3", "chat_type": "dm"}
+
+
+def test_describe_again_redoes_only_old_machine_descriptions(tmp_path):
+    prompts = []
+
+    def describer(path, prompt):
+        prompts.append((path.name, prompt))
+        return f"new words for {path.name}. Reactions: facepalm"
+
+    (tmp_path / st.DESCRIPTIONS_FILE).write_text(json.dumps({
+        "u-d1": {"text": "old vision text", "source": "vision"},
+        "u-d2": {"text": "my own words", "source": "owner"},
+        "u-d3": {"text": "from the hermes cache", "source": "hermes"},
+        "u-d4": {"text": "already new", "source": "vision", "prompt": st.PROMPT_VERSION},
+    }), encoding="utf-8")
+    service, _ = reaction_service(tmp_path, describer=describer, session=DM_SESSION)
+    assert "2 description(s) have no reaction words" in service.command("")
+    assert "Stickers: described 0 with" in service.command("describe")  # nothing missing: no redo
+    reply = service.command("describe again")
+    assert "described 2 again" in reply and "0 older description(s) left" in reply
+    assert [name for name, _ in prompts] == ["u-d1.webp", "u-d3.jpg"]  # animated: its still preview
+    saved = json.loads((tmp_path / st.DESCRIPTIONS_FILE).read_text(encoding="utf-8"))
+    assert saved["u-d2"]["text"] == "my own words" and saved["u-d4"]["text"] == "already new"
+    assert saved["u-d1"]["prompt"] == saved["u-d3"]["prompt"] == st.PROMPT_VERSION
+    assert "no reaction words" not in service.command("")
+
+
+def test_failed_redo_keeps_the_old_description(tmp_path):
+    def failing(path, prompt):
+        raise st.StickerError("vision is down")
+
+    (tmp_path / st.DESCRIPTIONS_FILE).write_text(json.dumps({
+        "u-d1": {"text": "old vision text", "source": "vision"}}), encoding="utf-8")
+    service, _ = reaction_service(tmp_path, describer=failing, session=DM_SESSION)
+    for _ in range(3):
+        service.command("describe again")
+    saved = json.loads((tmp_path / st.DESCRIPTIONS_FILE).read_text(encoding="utf-8"))
+    assert saved["u-d1"]["text"] == "old vision text" and saved["u-d1"]["redo_tries"] == 2

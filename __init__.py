@@ -70,8 +70,8 @@ def register(ctx) -> None:
     ctx.register_command("stickers", _stickers_command,
                          description="Sticker packs: status, sync, describe, off/on (here or by chat id), "
                                      "ban/unban, about",
-                         args_hint="[sync | describe [n] | off [chat id] | on [chat id] | ban <id> | unban <id> "
-                                   "| about <id> <text>]")
+                         args_hint="[sync | describe [again] [n] | off [chat id] | on [chat id] | ban <id> "
+                                   "| unban <id> | about <id> <text>]")
     skill = Path(__file__).parent / "skills" / "sticker-etiquette" / "SKILL.md"
     if skill.exists():
         ctx.register_skill("sticker-etiquette", skill,
