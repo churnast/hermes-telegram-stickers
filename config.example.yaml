@@ -1,0 +1,14 @@
+# Example settings for telegram-stickers: copy the block into ~/.hermes/config.yaml.
+# `hermes plugins install churnast/hermes-telegram-stickers --enable` already enables the plugin.
+plugins:
+  entries:
+    telegram-stickers:
+      settings:
+        packs:                      # favourite first: short names or t.me/addstickers/ links
+          - MyFavouritePack
+          - https://t.me/addstickers/AnotherPack
+        min_messages_between: 8     # about one sticker per 8 messages in a chat; 0 turns pacing off
+        cooldown_seconds: 20        # never two stickers within 20 seconds in a chat; 0 turns it off
+        describe_batch: 30          # stickers per /stickers describe run, one vision call each
+        allow_other_chats: false    # true lets the agent send to another chat by chat_id
+        # api_base: https://api.telegram.org   # only for a self-hosted Bot API server
