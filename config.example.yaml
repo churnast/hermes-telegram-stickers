@@ -1,0 +1,20 @@
+# Example settings for telegram-stickers. Do not paste a second `plugins:` key into your Hermes config file:
+# put `entries:` under the `plugins:` section you already have and keep `enabled:`, or use `hermes config set`.
+plugins:
+  enabled:
+    - telegram-stickers             # written by `hermes plugins install ... --enable`; keep it
+  entries:
+    telegram-stickers:
+      settings:
+        packs:                      # favourite first: short names or t.me/addstickers/ links
+          - MyFavouritePack
+          - https://t.me/addstickers/AnotherPack
+        learn_packs: true           # stickers sent to the bot in a direct chat add their packs, after these
+        default_packs: true         # four packs made by Telegram while there are no packs from the two above
+        turn_hint: true             # a short sticker hint on Telegram turns where a sticker is allowed now
+        min_messages_between: 6     # one sticker per 6 messages in a chat at most (Telegram message numbers,
+                                    # the bot's own included); 0 turns this limit off
+        cooldown_seconds: 20        # never two stickers within 20 seconds in a chat; 0 turns this limit off
+        describe_batch: 30          # stickers per /stickers describe run, one vision call each
+        allow_other_chats: false    # true lets the agent send to another chat by chat_id
+        # api_base: https://api.telegram.org   # only for a self-hosted Bot API server

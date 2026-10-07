@@ -1,0 +1,102 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install "ruff>=0.6,<1"
+      - run: ruff check .
+
+  tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install "pytest>=8,<9"
+      - run: python -m pytest -c tests/pytest.ini --rootdir tests tests
+
+  hermes:
+    name: hermes validate (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    # Hermes main changes every day: a failure there is a warning to look at, not a red build.
+    continue-on-error: ${{ matrix.upstream }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported Hermes (requires_hermes in plugin.yaml): it has no
+          # `hermes plugins validate`, and its requires-python stops before 3.14.
+          - name: Hermes Agent 0.20.6
+            ref: v2026.8.27
+            python: "3.12"
+            validate: false
+            upstream: false
+          - name: Hermes Agent 0.21.5
+            ref: v2026.9.24
+            python: "3.14"
+            validate: true
+            upstream: false
+          - name: hermes-agent main
+            ref: main
+            python: "3.14"
+            validate: true
+            upstream: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: plugin
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Hermes Agent
+        env:
+          HERMES_REF: ${{ matrix.ref }}
+          HERMES_PYTHON: ${{ matrix.python }}
+        run: |
+          # Whole history and tags, file contents on demand, as the plugin catalog CI checks out Hermes:
+          # main reads its own version from the release tags and reports "unknown" in a shallow clone.
+          git clone --filter=blob:none --branch "$HERMES_REF" https://github.com/NousResearch/hermes-agent.git hermes
+          uv venv --python "$HERMES_PYTHON" .venv
+          uv pip install --python .venv -e ./hermes
+      - name: Validate like the plugin catalog
+        if: ${{ matrix.validate }}
+        working-directory: plugin
+        env:
+          HERMES_HOME: ${{ runner.temp }}/hermes-home
+        run: ../.venv/bin/hermes plugins validate . --install-deps
+      - name: Check runtime contracts
+        working-directory: plugin
+        env:
+          HERMES_HOME: ${{ runner.temp }}/hermes-home
+        run: ../.venv/bin/hermes plugins doctor . --ci
+      - name: Check that Hermes' sticker note still names the pack
+        # Without the plugin's Telegram handler, packs of static stickers are learned from this note.
+        working-directory: plugin
+        run: |
+          ../.venv/bin/python - <<'EOF'
+          import sys
+          sys.path.insert(0, ".")
+          import stickers
+          from gateway.sticker_cache import build_sticker_injection
+          text = build_sticker_injection("A cat waving", "\U0001F600", "Pack_1")
+          assert stickers.sticker_notes(text) == ["Pack_1"], text
+          print("sticker note format OK:", text)
+          EOF

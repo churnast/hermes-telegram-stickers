@@ -1,0 +1,66 @@
+name: telegram-stickers
+version: 1.0.0
+manifest_version: 1
+description: "Lets the agent answer with stickers from Telegram packs its owner lists or sends the bot, with default packs out of the box: picks by meaning or emoji, replies in the current chat and forum topic, avoids repeats, with per-chat pacing and an off switch."
+author: "churnast"
+license: MIT
+homepage: "https://github.com/churnast/hermes-telegram-stickers"
+tags: [telegram, stickers, gateway, vision]
+requires_hermes: ">=0.20.6"
+provides_tools:
+  - telegram_sticker_find
+  - telegram_sticker_send
+  - telegram_sticker_mute
+provides_hooks:
+  - pre_llm_call
+requires_env:
+  - name: TELEGRAM_BOT_TOKEN
+    description: "The bot token your Hermes Telegram gateway already uses. Stickers are sent as that bot."
+    url: "https://core.telegram.org/bots#how-do-i-create-a-bot"
+    secret: true
+config_schema:
+  packs:
+    type: list
+    default: []
+    label: "Sticker packs"
+    description: "Sticker set short names (the part after t.me/addstickers/) or full links, favourite first. Used before learned packs."
+  learn_packs:
+    type: bool
+    default: true
+    label: "Learn packs from stickers you send"
+    description: "On: a sticker you send the bot in a direct chat adds its pack (after settings.packs, newest first; it stays until '/stickers forget' or until Telegram says the pack is gone). Groups never count; forwarded stickers do not either, except on Hermes 0.20.6, which has no Telegram handlers for plugins. Anyone who messages the bot directly adds packs too, so on a bot several people use, turn this off. Off: learned packs are not used or added."
+  default_packs:
+    type: bool
+    default: true
+    label: "Default packs"
+    description: "On: while there are no packs from settings.packs or learning, use four packs made by Telegram (TheFoods, MelieTheCavy, OfficeTurkey, Animals)."
+  turn_hint:
+    type: bool
+    default: true
+    label: "Sticker hint on Telegram turns"
+    description: "On: on a Telegram turn where a sticker is allowed now (stickers on in the chat, pacing passed), the plugin appends a short hint to that turn's user message, so the agent may answer a joke, good news or a strong emotion with a sticker nobody asked for. Off: no hint; the agent sends stickers only when asked or when it thinks of them itself."
+  cooldown_seconds:
+    type: int
+    default: 20
+    label: "Cooldown per chat (seconds)"
+    description: "Minimum gap between two stickers in the same chat. 0 turns it off."
+  min_messages_between:
+    type: int
+    default: 6
+    label: "Messages between stickers"
+    description: "At least this many messages between two stickers in a chat, counted by Telegram message numbers, the bot's own messages included (in a direct chat, 6 is about every third message of the person). 0 turns this limit off."
+  describe_batch:
+    type: int
+    default: 30
+    label: "Stickers per /stickers describe"
+    description: "How many stickers one '/stickers describe' (or 'describe again') run sends to the vision model, one image each."
+  allow_other_chats:
+    type: bool
+    default: false
+    label: "Allow other chats"
+    description: "Off: stickers go only to the chat of the current turn. On: the agent may pass any chat_id."
+  api_base:
+    type: str
+    default: "https://api.telegram.org"
+    label: "Bot API base URL"
+    description: "Change only if your gateway uses a self-hosted Bot API server."
