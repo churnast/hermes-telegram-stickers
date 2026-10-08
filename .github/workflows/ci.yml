@@ -100,3 +100,13 @@ jobs:
           assert stickers.sticker_notes(text) == ["Pack_1"], text
           print("sticker note format OK:", text)
           EOF
+      - name: Check that the sticker tools get no tool progress line
+        # On a Telegram turn, the plugin's tool_execution middleware runs the sticker tools itself after Hermes'
+        # own pre_tool_call step and argument coercion, so Hermes never reaches the step that emits "tool.started",
+        # the event its gateway posts as a progress line. This fails when Hermes' loader, chain or tool loop step
+        # stops running it that way, when those two Hermes functions change, or when Hermes emits that event before
+        # the chain.
+        working-directory: plugin
+        env:
+          HERMES_HOME: ${{ runner.temp }}/hermes-home-progress
+        run: ../.venv/bin/python .github/scripts/check_tool_progress.py

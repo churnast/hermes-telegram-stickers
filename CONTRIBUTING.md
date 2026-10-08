@@ -32,6 +32,14 @@ The plugin supports Hermes Agent 0.20.6 and newer. Hermes 0.20.6 has no `hermes 
 `doctor` on 0.20.6. Before Hermes 0.21.5, the gateway runs plugin slash commands without the chat they came
 from: `/stickers` then refuses the owner's commands in chats and points to the Hermes CLI (see the README).
 
+On each Hermes version CI runs (0.20.6, 0.21.5 and main), CI also runs `.github/scripts/check_tool_progress.py`
+with an empty `HERMES_HOME`: Hermes' own loader must register the plugin's `tool_execution` middleware; Hermes' own
+tool loop step must then run the sticker tools on a Telegram turn without posting its progress event, after
+Hermes' `pre_tool_call` hooks (a probe plugin's block and modify answers count) and argument coercion, while
+another tool, a sticker tool on a CLI turn and `model_tools.handle_function_call` still go through Hermes; and
+`agent/tool_executor.py` must still post its progress event only from the step at the end of the chain. Run it
+the same way in a Hermes environment, from the plugin checkout.
+
 ## Pull requests
 
 - Keep each pull request to one change, with tests for it.

@@ -43,8 +43,20 @@ now, unless the owner turned the hint off (`turn_hint: false`).
 5. Got a sticker and want to acknowledge it without a new message: react with
    `send_message` (`action: "react"`) instead of sending a sticker back.
 6. If Hermes hides plugin tools behind `tool_search` / `tool_describe` / `tool_call`, call
-   `telegram_sticker_send` (`sticker`) and `telegram_sticker_find` (`query` or `emoji`) through
-   `tool_call` directly: no need to search for them first.
+   `telegram_sticker_send` (`{"sticker": "facepalm"}`) and `telegram_sticker_find` (`query` or `emoji`)
+   through `tool_call` directly: no need to search for them or describe them first, and each such
+   lookup shows up as a line in the chat.
+
+## Setup and settings in words
+
+- A paragraph starting with "[telegram-stickers setup]" means the setup runs in this direct chat: answer
+  what they wrote first, then ask the one question it names, in their language. Save each answer with
+  `telegram_sticker_settings` and follow its `next` line.
+- Later, when someone asks to change stickers ("less often", "only when I ask", "don't send this one",
+  "remove the pack ...", "show my packs", "set up stickers"), use `telegram_sticker_settings` with the
+  matching action. Before `forget_all`, list the packs and ask; call it with `confirm: true` only after a yes.
+- In a group, only make stickers rarer, `on_request` or `off` there. For anything else, ask them to write
+  to you directly.
 
 ## Errors
 

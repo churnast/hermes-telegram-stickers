@@ -69,3 +69,39 @@ MUTE = {
     ),
     "parameters": {"type": "object", "properties": {}},
 }
+
+SETTINGS = {
+    "name": "telegram_sticker_settings",
+    "description": (
+        "Sticker settings in words, and the setup in the owner's direct chat. Use it when someone asks to send "
+        "stickers more or less often, only on request, or not at all; to stop using a sticker you just sent "
+        "('don't send this one'); to remove a pack or all packs; to bring back the default packs; to show their "
+        "packs and settings; or to set up stickers ('set up stickers'). Actions: list; pace (where: here, direct "
+        "or groups; every: rarely, sometimes, often, a number, off, on, on_request, or same for groups); "
+        "setup_start, setup_finish, setup_skip; ban and unban (sticker: last, previous or an id); forget_pack "
+        "(pack: a short name, words of its title, or this = the pack of the last sticker sent here); forget_all "
+        "(ask first, then confirm: true); defaults (value: on or off). In a direct chat everything works; in a "
+        "group only list and pace here that is rarer, off or on_request. Answers carry facts and a 'next' line: "
+        "say it in their language, briefly."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string",
+                       "enum": ["list", "setup_start", "pace", "setup_finish", "setup_skip", "ban", "unban",
+                                "forget_pack", "forget_all", "defaults"]},
+            "where": {"type": "string", "enum": ["here", "direct", "groups"],
+                      "description": "For pace: this chat (default), all direct chats, or all groups."},
+            "every": {"type": "string",
+                      "description": "For pace: rarely, sometimes, often, a number (of their messages in a direct "
+                                     "chat, of all messages in a group), off, on, on_request, or same (groups as "
+                                     "the direct chat)."},
+            "sticker": {"type": "string", "description": "For ban or unban: last (default), previous, or an id."},
+            "pack": {"type": "string",
+                     "description": "For forget_pack: short name, words of the title, or this."},
+            "confirm": {"type": "boolean", "description": "For forget_all: true only after they said yes."},
+            "value": {"type": "string", "enum": ["on", "off"], "description": "For defaults."},
+        },
+        "required": ["action"],
+    },
+}

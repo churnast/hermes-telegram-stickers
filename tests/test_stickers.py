@@ -91,7 +91,7 @@ def no_vision(path, prompt):
 
 def make_service(tmp_path, fake, config=None, session=None, clock=None, seed=1,
                  describer=no_vision, hermes=None):
-    cfg = {"packs": ["cats", "memes"], "cooldown_seconds": 20, "allow_other_chats": False}
+    cfg = {"packs": ["cats", "memes"], "cooldown_seconds": 20, "allow_other_chats": False, "setup": False}
     cfg.update(config or {})
     now = {"t": 1_000_000.0}
     sess = session if session is not None else {
@@ -504,7 +504,8 @@ def test_register_wires_tools_command_and_skill(tmp_path, monkeypatch):
 
     ctx = Ctx()
     module.register(ctx)
-    assert set(ctx.tools) == {"telegram_sticker_find", "telegram_sticker_send", "telegram_sticker_mute"}
+    assert set(ctx.tools) == {"telegram_sticker_find", "telegram_sticker_send", "telegram_sticker_mute",
+                         "telegram_sticker_settings"}
     assert ctx.tools["telegram_sticker_send"][1]["parameters"]["required"] == ["sticker"]
     assert set(ctx.commands) == {"stickers"}
     assert ctx.commands["stickers"]("dance").startswith("Usage:")
@@ -743,7 +744,8 @@ def test_mute_description_says_who_can_switch_stickers_back_on():
 
 
 def load_plugin(tmp_path, monkeypatch, settings):
-    """Register the plugin the way Hermes does and return (tools, commands)."""
+    """Register the plugin the way Hermes does and return (tools, commands). The setup is off unless asked for."""
+    settings = {"setup": False, **settings}
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     spec = importlib.util.spec_from_file_location(
         "telegram_stickers_plugin", ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
@@ -1247,7 +1249,8 @@ def test_handler_and_hook_learn_from_direct_chat_stickers(tmp_path, monkeypatch)
 def test_plugin_still_loads_when_native_handlers_are_refused(tmp_path, monkeypatch):
     module, tools, _ = load_plugin(tmp_path, monkeypatch, {"packs": ["cats"], "_isolated": True})
     assert module._test_ctx.telegram == [] and "pre_llm_call" in module._test_ctx.hooks
-    assert set(tools) == {"telegram_sticker_find", "telegram_sticker_send", "telegram_sticker_mute"}
+    assert set(tools) == {"telegram_sticker_find", "telegram_sticker_send", "telegram_sticker_mute",
+                         "telegram_sticker_settings"}
     assert module._service.observer_wired is False
 
 
@@ -1353,9 +1356,12 @@ def hint_service(tmp_path, config=None):
 
 def test_turn_hint_text():
     hint = st.TURN_HINT
-    assert hint.startswith("[telegram-stickers] ") and len(hint) <= 450
+    assert hint.startswith("[telegram-stickers] ") and len(hint) <= 560
     assert "\u2014" not in hint and "\u2013" not in hint and " - " not in hint
     assert "telegram_sticker_send" in hint and "tool_call" in hint and "never instead of a real answer" in hint
+    # The whole call, so that with tool search on the agent need not search or describe first (each would post
+    # Hermes' own progress line in the chat).
+    assert 'telegram_sticker_send with {"sticker": ' in hint and "no tool_search or tool_describe first" in hint
 
 
 def test_turn_hint_when_a_sticker_is_allowed_and_not_otherwise(tmp_path, monkeypatch):
@@ -1436,13 +1442,13 @@ def test_default_pace_is_six_messages_and_send_errors_are_unchanged(tmp_path):
     with pytest.raises(st.StickerError) as info:
         service.send({"sticker": "😏"})
     assert str(info.value) == ("A sticker already went to this chat 5 s ago. Wait 16 s or answer in words; "
-                               "this keeps stickers from piling up.")
+                               "this keeps stickers from piling up. " + st.PACING_PRIVATE)
     now["t"] += 16
     session["message_id"] = "105"
     with pytest.raises(st.StickerError) as info:
         service.send({"sticker": "😏"})
     assert str(info.value) == ("The last sticker in this chat was only 5 messages ago; stickers are paced to "
-                               "about one per 6 messages. Answer in words.")
+                               "about one per 6 messages. Answer in words. " + st.PACING_PRIVATE)
     session["message_id"] = "106"
     assert service.send({"sticker": "😏"})["success"]
 

@@ -11,7 +11,9 @@ plugins:
           - https://t.me/addstickers/AnotherPack
         learn_packs: true           # stickers sent to the bot in a direct chat add their packs, after these
         default_packs: true         # four packs made by Telegram while there are no packs from the two above
+        setup: true                 # after a fresh install, a short setup in the owner's direct chat
         turn_hint: true             # a short sticker hint on Telegram turns where a sticker is allowed now
+        hide_tool_progress: true    # no tool progress line ("telegram_sticker_send...") before a sticker
         min_messages_between: 6     # one sticker per 6 messages in a chat at most (Telegram message numbers,
                                     # the bot's own included); 0 turns this limit off
         cooldown_seconds: 20        # never two stickers within 20 seconds in a chat; 0 turns this limit off
