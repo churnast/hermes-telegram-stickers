@@ -692,15 +692,6 @@ def reactions_in(query: str) -> list[Reaction]:
     return found
 
 
-def _is_compound_of(word: str, described: set[str]) -> bool:
-    """'facepalm' starts with 'face', 'eyeroll' ends with 'roll': a described word of four letters or more
-    at either end of a longer word, with at least three letters left over ('flight' is not 'light')."""
-    if len(word) < 7:  # a part of four letters and three left over
-        return False
-    return any(len(part) >= 4 and len(word) - len(part) >= 3 and (word.startswith(part) or word.endswith(part))
-               for part in described)
-
-
 # Text from the model that goes into a search is cut to this size first, so a long or hostile argument costs about
 # what a few words cost: a search reads every sticker in every pack in use, and learned packs have no cap.
 MAX_QUERY_CHARS = 200  # a query or a sticker named in words: "a few English words"
@@ -708,26 +699,80 @@ MAX_QUERY_WORDS = 6  # words of a query that count, in order (repeats count agai
 MAX_EMOJI_CHARS = 16  # one emoji with skin tones and joiners fits easily
 
 
+_TOKEN = re.compile(r"\w+")  # runs of word characters: what a regex word boundary counts as one word
+
+
+def _ends(word: str) -> frozenset[str]:
+    """The starts and ends of a word that count as a part of a compound word: four letters or more, with at least
+    three letters left over, so 'facepalm' is 'face' + 'palm' and 'flight' is not 'light'. 'facepalm' gives face,
+    facep, palm and epalm. Stop words are not parts, as _words leaves them out."""
+    return frozenset(piece for size in range(4, len(word) - 2) for piece in (word[:size], word[-size:])
+                     if piece not in _STOP)
+
+
 class Query:
     """A query read once for a whole search: its words (at most MAX_QUERY_WORDS of the first MAX_QUERY_CHARS
-    characters), a whole-word pattern, stem and singulars for each, its emoji and the reactions it names."""
+    characters), with the stem, singulars and compound-word parts of each, its emoji and the reactions it names
+    (at most MAX_QUERY_WORDS of them), with all their cue words in one set and one pattern."""
 
-    __slots__ = ("words", "key", "reactions")
+    __slots__ = ("words", "key", "reactions", "cues", "cue_pattern")
 
     def __init__(self, text: str) -> None:
         text = (text or "")[:MAX_QUERY_CHARS]
-        patterns: dict[str, re.Pattern[str]] = {}
-        self.words = []
-        for word in _words(text)[:MAX_QUERY_WORDS]:
-            if word not in patterns:
-                patterns[word] = re.compile(rf"\b{re.escape(word)}\b")
-            self.words.append((word, patterns[word], _stem(word), _forms(word)))
+        self.words = [(word, _stem(word), _forms(word), _ends(word)) for word in _words(text)[:MAX_QUERY_WORDS]]
         self.key = emoji_key(text)
-        self.reactions = reactions_in(text)
+        self.reactions = reactions_in(text)[:MAX_QUERY_WORDS]
+        self.cues = frozenset(cue for _, cues in self.reactions for cue in cues if len(cue) > 2 and cue not in _STOP)
+        self.cue_pattern = (re.compile("|".join(re.escape(cue) for cue in sorted(self.cues))) if self.cues
+                            else None)
 
 
-def relevance(query: str | Query, sticker: dict[str, Any], description: str,
-              in_pack: frozenset[str] = frozenset()) -> int:
+class _Described:
+    """What a search needs from one description, read once and only as far as needed: the lowercased text, its
+    runs of word characters (a query word is a whole word of the text exactly when it is one of them, as a regex
+    word boundary sees it) and its runs of letters and digits (what _words splits a text into, before it drops
+    short and stop words). Most stickers do not contain a query word at all, which a plain substring test shows,
+    so the runs are only split out for those that might."""
+
+    __slots__ = ("text", "_tokens", "_runs")
+
+    def __init__(self, description: str) -> None:
+        self.text = (description or "").lower()
+        self._tokens: frozenset[str] | None = None
+        self._runs: frozenset[str] | None = None
+
+    @property
+    def tokens(self) -> frozenset[str]:
+        if self._tokens is None:
+            self._tokens = frozenset(_TOKEN.findall(self.text))
+        return self._tokens
+
+    @property
+    def runs(self) -> frozenset[str]:
+        if self._runs is None:  # without '_' in the text, the runs of word characters are the same
+            self._runs = (self.tokens if "_" not in self.text
+                          else frozenset(part for token in self.tokens for part in token.split("_") if part))
+        return self._runs
+
+    def has_word(self, word: str) -> bool:
+        """`word` (letters and digits, as _words gives it) is a whole word of the text."""
+        return word in self.text and word in self.tokens
+
+    def has_part(self, word: str, ends: frozenset[str]) -> bool:
+        """One of the description's words is a part of `word` (see _ends). Such a part starts with the first four
+        letters of `word` or ends with its last four, so without those in the text there is none."""
+        return bool(ends) and (word[:4] in self.text or word[-4:] in self.text) and not ends.isdisjoint(self.runs)
+
+    def cue_words(self, query: Query) -> frozenset[str]:
+        """The cue words of the query's reactions that are words of the description. One pattern search finds
+        whether any of them is in the text at all."""
+        if query.cue_pattern is None or not query.cue_pattern.search(self.text):
+            return frozenset()
+        return query.cues & self.runs
+
+
+def relevance(query: str | Query, sticker: dict[str, Any], description: str | _Described,
+              in_pack: frozenset[str] = frozenset(), key: str | None = None) -> int:
     """How well a sticker fits a few words. 0 means no match.
 
     Whole words in the description count two, word stems and parts of a compound word ('face' in
@@ -736,49 +781,59 @@ def relevance(query: str | Query, sticker: dict[str, Any], description: str,
     sticker's own description, so a pack named after what was asked for answers before it is described. A
     reaction named in the query ('facepalm', 'thumbs up') adds three for the emoji pack authors use for it
     most, two for a related emoji, and one for each of up to two words such stickers are usually described
-    with. Only the start of a long query counts (see Query)."""
+    with. Only the start of a long query counts (see Query). `key` is the sticker's emoji_key, when the caller
+    has it."""
     if not isinstance(query, Query):
         query = Query(query)
-    text = (description or "").lower()
-    described: set[str] | None = None  # the description's words, read only when needed
+    read = description if isinstance(description, _Described) else _Described(description)
+    text = read.text
     score = 0
-    for word, pattern, stem, forms in query.words:
-        if text and pattern.search(text):
-            score += 2
-        elif text and stem in text:
-            score += 1
-        elif text:
-            described = set(_words(text)) if described is None else described
-            if _is_compound_of(word, described):
+    for word, stem, forms, ends in query.words:
+        if text:
+            if read.has_word(word):
+                score += 2
+            elif stem in text or read.has_part(word, ends):
                 score += 1
         if in_pack and forms & in_pack:
             score += 1
-    key = emoji_key(sticker.get("emoji", ""))
+    if key is None:
+        key = emoji_key(sticker.get("emoji", ""))
     if key and key in query.key:
         score += 2
+    hits = read.cue_words(query) if text and query.reactions else frozenset()
     for emojis, cues in query.reactions:
         if key and key == emojis[0]:
             score += 3
         elif key and key in emojis:
             score += 2
-        if text:
-            described = set(_words(text)) if described is None else described
-            score += min(2, len(cues & described))
+        if hits:
+            score += min(2, len(cues & hits))
     return score
 
 
 def search(catalog: dict[str, Any], packs: list[str], descriptions: dict[str, Any], query: str,
            pack: str = "") -> list[tuple[int, str, dict[str, Any]]]:
-    """Best matches first; ties keep the owner's pack order. Words also match pack titles and short names."""
+    """Best matches first; ties keep the owner's pack order. Words also match pack titles and short names.
+    The query, each description and each emoji are read once per search."""
     found = []
     words_of: dict[str, frozenset[str]] = {}
     read = Query(query)
     if not read.words and not read.key and not read.reactions:
         return []
+    described: dict[str, _Described] = {}
+    keys: dict[str, str] = {}
     for order, (name, sticker) in enumerate(all_stickers(catalog, packs, pack)):
         if name not in words_of:
             words_of[name] = pack_words(name, str(catalog["packs"][name].get("title") or ""))
-        score = relevance(read, sticker, description_of(descriptions, sticker), words_of[name])
+        text = description_of(descriptions, sticker)
+        about = described.get(text)
+        if about is None:
+            about = described[text] = _Described(text)
+        emoji = sticker.get("emoji", "")
+        key = keys.get(emoji)
+        if key is None:
+            key = keys[emoji] = emoji_key(emoji)
+        score = relevance(read, sticker, about, words_of[name], key)
         if score:
             found.append((score, order, name, sticker))
     found.sort(key=lambda item: (-item[0], item[1]))

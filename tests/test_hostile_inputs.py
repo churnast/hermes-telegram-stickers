@@ -3,7 +3,8 @@ through Hermes' secret scope.
 
 A search reads every sticker in every pack in use, and learned packs have no cap, so the model's text is cut before
 anything reads it (MAX_QUERY_CHARS, MAX_QUERY_WORDS, MAX_EMOJI_CHARS). Each timing is the best of three runs and
-must stay under 100 ms; 1.1.0 took up to 70 s here on a 16,000-character query.
+must stay under 100 ms; 1.1.0 took up to 70 s here on a 16,000-character query, and 1.1.1 up to 109 ms on
+GitHub's Windows runners.
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ HOSTILE = {
     "find, 16,000 chars of distinct words": lambda s: s.find({"query": distinct(16_000)}),
     "find, 16,000 chars of long distinct words": lambda s: s.find({"query": distinct(16_000, 12)}),
     "find, 30,000 chars of 'facepalm '": lambda s: s.find({"query": "facepalm " * 3_400}),
+    "find, 200 chars of words the descriptions have": lambda s: s.find({"query": " ".join(WORDS * 3)[:200]}),
     "find, one 100,000-char word": lambda s: s.find({"query": "a" * 100_000}),
     "find, 10,000 emoji no pack has": lambda s: s.find({"emoji": "🍒🚀🦄🧲🪐🫧" * 1_700}),
     "find, 100,000-char pack name": lambda s: s.find({"pack": "p" * 100_000, "emoji": "😂"}),

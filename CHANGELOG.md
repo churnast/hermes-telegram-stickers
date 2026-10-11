@@ -6,6 +6,17 @@ All notable changes to this project are written down here. The format is based o
 
 ## [Unreleased]
 
+## [1.1.2] (2026-10-11)
+
+### Changed
+
+- Faster search: each description is read once per search and only as far as needed. A plain substring test rules out most stickers before their words are split out; a whole word is looked up in the description's set of words instead of a pattern search per word and sticker; the parts of a compound word ('face' in 'facepalm') are looked up as one set against the description's words; and the cue words of all reactions named in a query are found with one pattern. Picks are the same as in 1.1.0 and 1.1.1. On 2,000 stickers on a Mac the slowest input tried takes about 22 ms (1.1.1: about 48 ms), and a 16,000-character query of long words about 12 ms (1.1.1: about 48 ms; on GitHub's Windows runners 103 to 109 ms, over the tests' 100 ms limit).
+- At most 6 reactions named in a query count, like its words.
+
+### Added
+
+- A timing test with 200 characters of words the descriptions contain.
+
 ## [1.1.1] (2026-10-11)
 
 ### Changed
@@ -140,7 +151,8 @@ First public release.
 - Pacing: about one sticker per 8 messages and a 20 second cooldown per chat, kept across restarts; the last five stickers sent in a chat are not repeated.
 - Bundled `sticker-etiquette` skill.
 
-[Unreleased]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/churnast/hermes-telegram-stickers/releases/tag/v1.0.0
