@@ -24,12 +24,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 import sys
 from pathlib import Path
 
 from . import schemas
-from .stickers import NO_TOKEN, StickerError, StickerService, command_origin, in_plugin_host
+from .stickers import NO_TOKEN, StickerError, StickerService, bot_token, command_origin, in_plugin_host
 
 _service = None
 # Every tool register() registers, by name: the tools the tool_execution middleware runs itself.
@@ -53,12 +52,12 @@ def _json(data) -> str:
 
 
 def _has_token() -> bool:
-    return bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+    return bool(bot_token())
 
 
 def _scrub(text: str) -> str:
     """Last line of defence: no text that leaves the plugin carries the bot token."""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    token = bot_token()
     return text.replace(token, "<token>") if token else text
 
 

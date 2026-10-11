@@ -6,6 +6,20 @@ All notable changes to this project are written down here. The format is based o
 
 ## [Unreleased]
 
+## [1.1.1] (2026-10-11)
+
+### Changed
+
+- The bot token is read through Hermes' secret scope (`agent.secret_scope.get_secret`, in Hermes since 0.20.6) instead of the process environment, as the plugin catalog's rule 11 asks: when one gateway serves several profiles, each profile's stickers go out as its own bot. A read Hermes refuses (several profiles and no profile scope on that thread) counts as no token and never falls back to the environment. The setup's background lookup of a pack's title gets its client on the calling thread, where Hermes' profile scope is set. Without Hermes (the offline tests) the environment is read as before.
+- The agent's text that goes into a search is cut before anything reads it: a query or a sticker named in words to its first 6 words longer than two letters within the first 200 characters, an emoji to 16 characters, a pack name and an id to 200. A search reads every sticker in every pack in use and learned packs have no cap, so in 1.1.0 a 16,000-character query took about 70 seconds on 2,000 stickers; now the slowest input tried takes about 50 ms there on a Mac. The query is read once per search instead of once per sticker. Picks for ordinary queries are the same as in 1.1.0.
+- A sticker id or a Telegram id with more digits than any real one is refused like any unknown id instead of failing with a Python error.
+- The pack list of `telegram_sticker_settings` and `forget_pack` read the pack catalog once instead of once per pack.
+
+### Added
+
+- Tests with 2,000 stickers: long and hostile text through `telegram_sticker_find`, `telegram_sticker_send` and `telegram_sticker_settings`, each under 100 ms; the token read through a stand-in secret scope, a refused read and no Hermes.
+- The README now also discloses the settings note: when a Telegram turn's user message mentions stickers or packs, the `pre_llm_call` hook puts a fixed note of about 310 characters before the hint (save a change with `telegram_sticker_settings`, never confirm a change that was not saved). It came with 1.1.0 and was not in the README.
+
 ## [1.1.0] (2026-10-08)
 
 ### Added
@@ -126,7 +140,8 @@ First public release.
 - Pacing: about one sticker per 8 messages and a 20 second cooldown per chat, kept across restarts; the last five stickers sent in a chat are not repeated.
 - Bundled `sticker-etiquette` skill.
 
-[Unreleased]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/churnast/hermes-telegram-stickers/releases/tag/v1.0.0
 [0.1.2]: https://github.com/churnast/hermes-telegram-stickers/compare/v0.1.1...v0.1.2

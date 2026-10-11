@@ -153,7 +153,24 @@ ADDSTICKERS_PREFIXES = (
 )
 
 
+TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 NO_TOKEN = "TELEGRAM_BOT_TOKEN is not set, so there is no bot to send stickers from."
+
+
+def bot_token() -> str:
+    """The gateway's bot token for the current Hermes profile, read through Hermes' secret scope
+    (agent.secret_scope.get_secret, in Hermes since 0.20.6): when one gateway serves several profiles, the process
+    environment may hold another profile's token. A read Hermes refuses (several profiles and no profile scope on
+    this thread) counts as no token. Only where Hermes is not importable (the offline tests) the process
+    environment is read directly."""
+    try:
+        from agent.secret_scope import get_secret  # type: ignore
+    except ImportError:
+        return os.environ.get(TOKEN_ENV, "")
+    try:
+        return str(get_secret(TOKEN_ENV, "") or "")
+    except Exception:  # UnscopedSecretError: never fall back to another profile's token
+        return ""
 
 
 class StickerError(Exception):
@@ -678,11 +695,38 @@ def reactions_in(query: str) -> list[Reaction]:
 def _is_compound_of(word: str, described: set[str]) -> bool:
     """'facepalm' starts with 'face', 'eyeroll' ends with 'roll': a described word of four letters or more
     at either end of a longer word, with at least three letters left over ('flight' is not 'light')."""
+    if len(word) < 7:  # a part of four letters and three left over
+        return False
     return any(len(part) >= 4 and len(word) - len(part) >= 3 and (word.startswith(part) or word.endswith(part))
                for part in described)
 
 
-def relevance(query: str, sticker: dict[str, Any], description: str,
+# Text from the model that goes into a search is cut to this size first, so a long or hostile argument costs about
+# what a few words cost: a search reads every sticker in every pack in use, and learned packs have no cap.
+MAX_QUERY_CHARS = 200  # a query or a sticker named in words: "a few English words"
+MAX_QUERY_WORDS = 6  # words of a query that count, in order (repeats count again, as before)
+MAX_EMOJI_CHARS = 16  # one emoji with skin tones and joiners fits easily
+
+
+class Query:
+    """A query read once for a whole search: its words (at most MAX_QUERY_WORDS of the first MAX_QUERY_CHARS
+    characters), a whole-word pattern, stem and singulars for each, its emoji and the reactions it names."""
+
+    __slots__ = ("words", "key", "reactions")
+
+    def __init__(self, text: str) -> None:
+        text = (text or "")[:MAX_QUERY_CHARS]
+        patterns: dict[str, re.Pattern[str]] = {}
+        self.words = []
+        for word in _words(text)[:MAX_QUERY_WORDS]:
+            if word not in patterns:
+                patterns[word] = re.compile(rf"\b{re.escape(word)}\b")
+            self.words.append((word, patterns[word], _stem(word), _forms(word)))
+        self.key = emoji_key(text)
+        self.reactions = reactions_in(text)
+
+
+def relevance(query: str | Query, sticker: dict[str, Any], description: str,
               in_pack: frozenset[str] = frozenset()) -> int:
     """How well a sticker fits a few words. 0 means no match.
 
@@ -692,26 +736,34 @@ def relevance(query: str, sticker: dict[str, Any], description: str,
     sticker's own description, so a pack named after what was asked for answers before it is described. A
     reaction named in the query ('facepalm', 'thumbs up') adds three for the emoji pack authors use for it
     most, two for a related emoji, and one for each of up to two words such stickers are usually described
-    with."""
+    with. Only the start of a long query counts (see Query)."""
+    if not isinstance(query, Query):
+        query = Query(query)
     text = (description or "").lower()
-    described = set(_words(text))
+    described: set[str] | None = None  # the description's words, read only when needed
     score = 0
-    for word in _words(query):
-        if re.search(rf"\b{re.escape(word)}\b", text):
+    for word, pattern, stem, forms in query.words:
+        if text and pattern.search(text):
             score += 2
-        elif _stem(word) in text or _is_compound_of(word, described):
+        elif text and stem in text:
             score += 1
-        if in_pack and _forms(word) & in_pack:
+        elif text:
+            described = set(_words(text)) if described is None else described
+            if _is_compound_of(word, described):
+                score += 1
+        if in_pack and forms & in_pack:
             score += 1
     key = emoji_key(sticker.get("emoji", ""))
-    if key and key in emoji_key(query):
+    if key and key in query.key:
         score += 2
-    for emojis, cues in reactions_in(query):
+    for emojis, cues in query.reactions:
         if key and key == emojis[0]:
             score += 3
         elif key and key in emojis:
             score += 2
-        score += min(2, len(cues & described))
+        if text:
+            described = set(_words(text)) if described is None else described
+            score += min(2, len(cues & described))
     return score
 
 
@@ -720,10 +772,13 @@ def search(catalog: dict[str, Any], packs: list[str], descriptions: dict[str, An
     """Best matches first; ties keep the owner's pack order. Words also match pack titles and short names."""
     found = []
     words_of: dict[str, frozenset[str]] = {}
+    read = Query(query)
+    if not read.words and not read.key and not read.reactions:
+        return []
     for order, (name, sticker) in enumerate(all_stickers(catalog, packs, pack)):
         if name not in words_of:
             words_of[name] = pack_words(name, str(catalog["packs"][name].get("title") or ""))
-        score = relevance(query, sticker, description_of(descriptions, sticker), words_of[name])
+        score = relevance(read, sticker, description_of(descriptions, sticker), words_of[name])
         if score:
             found.append((score, order, name, sticker))
     found.sort(key=lambda item: (-item[0], item[1]))
@@ -802,18 +857,19 @@ def by_emoji_name(catalog: dict[str, Any], packs: list[str], descriptions: dict[
     """For an emoji no sticker is tagged with and with no nearest feeling: (the words of its name, the stickers
     those words find in pack titles, short names and descriptions). 🍒 finds a pack called Hot Cherry. Only a
     whole word counts here, never a stem or part of a word: ROCKET must not find 'rocking', CAT 'vacation'."""
-    words = emoji_name_words(emoji)
+    words = emoji_name_words((emoji or "")[:MAX_EMOJI_CHARS])[:MAX_QUERY_WORDS]
     if not words:
         return words, []
-    forms = [_forms(word) for word in words]
+    forms = [(group, [re.compile(rf"\b{re.escape(form)}\b") for form in group])
+             for group in (_forms(word) for word in words)]
     titles: dict[str, frozenset[str]] = {}
 
     def named(name: str, sticker: dict[str, Any]) -> bool:
         if name not in titles:
             titles[name] = pack_words(name, str(catalog["packs"][name].get("title") or ""))
         text = description_of(descriptions, sticker).lower()
-        return any(group & titles[name] or any(re.search(rf"\b{re.escape(form)}\b", text) for form in group)
-                   for group in forms)
+        return any(group & titles[name] or any(pattern.search(text) for pattern in patterns)
+                   for group, patterns in forms)
 
     ranked = search(catalog, packs, descriptions, " ".join(words), pack=pack)
     return words, [(score, name, sticker) for score, name, sticker in ranked if named(name, sticker)]
@@ -838,13 +894,13 @@ def pick(catalog: dict[str, Any], packs: list[str], wanted: str, rng: random.Ran
     """'pack:12' picks one exact sticker; words pick the best match by description and reaction; an emoji
     picks at random, favouring earlier packs, falls back to the nearest feeling when no pack has it, and then
     to the words of its name. Stickers sent recently in the chat are skipped when possible."""
-    wanted = (wanted or "").strip()
+    wanted = (wanted or "").strip()[:MAX_QUERY_CHARS]
     avoid = set(avoid)
     if not wanted:
         raise StickerError("Say which sticker: an emoji such as 😏, a few words like 'sleepy cat', "
                            "or an id like 'pack_name:12'.")
     name, sep, index = wanted.rpartition(":")
-    if sep and name and index.isdigit():
+    if sep and name and _is_index(index):
         for sticker in catalog.get("packs", {}).get(name, {}).get("stickers", []):
             if sticker["i"] == int(index):
                 return name, sticker
@@ -858,6 +914,7 @@ def pick(catalog: dict[str, Any], packs: list[str], wanted: str, rng: random.Ran
             raise StickerError(f"No sticker fits '{wanted}'. {emoji_hint(catalog, packs)}{extra}")
         return _best_ranked(ranked, avoid, rng)
 
+    wanted = wanted[:MAX_EMOJI_CHARS]
     found = matches(catalog, packs, emoji=wanted) or closest(catalog, packs, wanted)
     if not found:
         ranked = by_emoji_name(catalog, packs, descriptions or {}, wanted)[1]
@@ -924,10 +981,17 @@ def current_session() -> dict[str, str]:
 
 
 def _as_int(value: Any) -> int | None:
+    """A Telegram id or message number as an int; anything else, or longer than any id, is None."""
     text = str(value).strip() if value is not None else ""
-    if text.lstrip("-").isdigit():
+    digits = text[1:] if text.startswith("-") else text
+    if 0 < len(digits) <= 20 and digits.isascii() and digits.isdigit():
         return int(text)
     return None
+
+
+def _is_index(text: str) -> bool:
+    """The number in a sticker id such as 'pack_name:12'."""
+    return 0 < len(text) <= 6 and text.isascii() and text.isdigit()
 
 
 _CHAT_ID = re.compile(r"-?[1-9][0-9]{0,19}")
@@ -1118,7 +1182,7 @@ class StickerService:
         return self._get_config("allow_other_chats", False) is True
 
     def client(self) -> TelegramClient:
-        return TelegramClient(os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        return TelegramClient(bot_token(),
                               api_base=str(self._get_config("api_base", DEFAULT_API_BASE) or DEFAULT_API_BASE),
                               opener=self._opener)
 
@@ -1127,8 +1191,7 @@ class StickerService:
         packs = self.packs()
         if not packs:
             raise StickerError(self._no_packs_message())
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        bot_id = bot_id_from_token(token)
+        bot_id = bot_id_from_token(bot_token())
         path = self._data_dir() / CATALOG_FILE
         with self._lock:
             cached = load_json(path)
@@ -1219,12 +1282,16 @@ class StickerService:
         key = pack.casefold()
         if key in self._pack_ready:
             return
+        try:
+            client = self.client()  # here, not in the thread: Hermes' profile scope for the token is on this one
+        except StickerError:
+            return
         ready = self._pack_ready[key] = threading.Event()
 
         def run() -> None:
             info: dict[str, Any] = {}
             try:
-                result = self.client().call("getStickerSet", name=pack)
+                result = client.call("getStickerSet", name=pack)
                 info = {"title": str(result.get("title") or pack), "count": len(result.get("stickers") or [])}
             except StickerError as exc:
                 info = {"gone": True} if "STICKERSET_INVALID" in str(exc) else {}
@@ -1234,16 +1301,18 @@ class StickerService:
             ready.set()
         threading.Thread(target=run, name="telegram-stickers-pack-info", daemon=True).start()
 
-    def pack_info(self, pack: str, wait: float = 0.0) -> dict[str, Any]:
+    def pack_info(self, pack: str, wait: float = 0.0, cached: dict[str, Any] | None = None) -> dict[str, Any]:
         """What is known about a pack without the network: its title and size from the background fetch or the
-        catalog file. `wait` gives a fetch that is still running that many seconds."""
+        catalog file. `wait` gives a fetch that is still running that many seconds; `cached` is the catalog's packs,
+        when the caller already read the file."""
         key = pack.casefold()
         ready = self._pack_ready.get(key)
         if ready is not None and wait > 0:
             ready.wait(wait)
         if self._pack_info.get(key):
             return dict(self._pack_info[key])
-        cached = (load_json(self._data_dir() / CATALOG_FILE) or {}).get("packs") or {}
+        if cached is None:
+            cached = (load_json(self._data_dir() / CATALOG_FILE) or {}).get("packs") or {}
         for name, entry in cached.items():
             if name.casefold() == key and isinstance(entry, dict):
                 return {"title": str(entry.get("title") or name), "count": len(entry.get("stickers") or [])}
@@ -1485,8 +1554,9 @@ class StickerService:
 
     def _resolve(self, wanted: str) -> tuple[str, dict[str, Any]]:
         catalog = self.catalog()
-        name, sep, index = (wanted or "").strip().rpartition(":")
-        if sep and index.isdigit():
+        wanted = (wanted or "").strip()[:MAX_QUERY_CHARS]
+        name, sep, index = wanted.rpartition(":")
+        if sep and _is_index(index):
             for sticker in catalog.get("packs", {}).get(name, {}).get("stickers", []):
                 if sticker["i"] == int(index) and sticker.get("uid"):
                     return name, sticker
@@ -1542,9 +1612,9 @@ class StickerService:
         catalog = without(self.catalog(refresh=bool(args.get("refresh"))), self.banned())
         packs = self.packs()
         descriptions = self.descriptions()
-        emoji = str(args.get("emoji") or "")
-        query = str(args.get("query") or "").strip()
-        pack = pack_name(str(args.get("pack") or ""))
+        emoji = str(args.get("emoji") or "").strip()[:MAX_EMOJI_CHARS]
+        query = str(args.get("query") or "").strip()[:MAX_QUERY_CHARS]
+        pack = pack_name(str(args.get("pack") or "")[:MAX_QUERY_CHARS])
         try:
             limit = min(50, max(1, int(args.get("limit") or 10)))
         except (TypeError, ValueError):
@@ -1678,7 +1748,7 @@ class StickerService:
         if about:
             out["about"] = about[:ABOUT_CHARS]
             out["data_note"] = ABOUT_TEXT_NOTE
-        wanted = str(args.get("sticker") or "").strip()
+        wanted = str(args.get("sticker") or "").strip()[:MAX_QUERY_CHARS]
         if not any(ch.isalnum() for ch in wanted) and emoji_key(sticker["emoji"]) != emoji_key(wanted):
             out["instead_of"] = wanted  # no pack had that emoji: the nearest feeling, or what its name says, went out
         return out
@@ -1728,7 +1798,7 @@ class StickerService:
         said = _HERMES_NOTE.sub(" ", _plain_text(user_message))  # Hermes' own sticker notes and quotes do not count
         if hint.startswith("[telegram-stickers setup]") or not _STICKER_WORDS.search(said):
             return hint
-        if str(platform or "").strip().lower() != "telegram" or not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        if str(platform or "").strip().lower() != "telegram" or not bot_token():
             return hint
         session = self._session()
         if str(session.get("platform") or "").strip().lower() != "telegram" or not session.get("chat_id"):
@@ -1742,7 +1812,7 @@ class StickerService:
         a group does not, since Hermes drops the sender of turns in groups where it observes every message. Reads
         settings and state.json only: never the network, since Hermes waits for this hook. In the owner's direct
         chat, while the setup runs, the setup hint comes instead (see setup_hint)."""
-        if str(platform or "").strip().lower() != "telegram" or not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        if str(platform or "").strip().lower() != "telegram" or not bot_token():
             return ""
         session = self._session()
         chat = str(session.get("chat_id") or "").strip()
@@ -2016,8 +2086,9 @@ class StickerService:
     def _titled(self, names: list[str]) -> list[dict[str, Any]]:
         """Packs with title and size where known (catalog file or the setup's fetch), no network."""
         out = []
+        cached = (load_json(self._data_dir() / CATALOG_FILE) or {}).get("packs") or {} if names else {}
         for name in names:
-            info = self.pack_info(name)
+            info = self.pack_info(name, cached=cached)
             item: dict[str, Any] = {"pack": name, "title": info.get("title") or name}
             if info.get("count"):
                 item["count"] = info["count"]
@@ -2090,7 +2161,7 @@ class StickerService:
         return [str(item) for item in recent] if isinstance(recent, list) else []
 
     def _settings_ban(self, chat: str, args: dict[str, Any]) -> dict[str, Any]:
-        which = str(args.get("sticker") or "last").strip()
+        which = str(args.get("sticker") or "last").strip()[:MAX_QUERY_CHARS]
         recent = self._recent(chat)
         if which.lower() in ("last", "this", ""):
             target = recent[-1] if recent else ""
@@ -2118,7 +2189,7 @@ class StickerService:
         return out
 
     def _settings_unban(self, chat: str, args: dict[str, Any]) -> dict[str, Any]:
-        which = str(args.get("sticker") or "last").strip()
+        which = str(args.get("sticker") or "last").strip()[:MAX_QUERY_CHARS]
         state = self.state()
         stack = state.get("last_banned") if isinstance(state.get("last_banned"), list) else []
         target = (stack[-1] if stack else "") if which.lower() in ("last", "this", "") else which
@@ -2146,8 +2217,9 @@ class StickerService:
         if not words:
             return []
         found = []
+        cached = (load_json(self._data_dir() / CATALOG_FILE) or {}).get("packs") or {}  # read once, not per pack
         for name in names:
-            have = {_stem(w) for w in pack_words(name, self.pack_info(name).get("title") or "")}
+            have = {_stem(w) for w in pack_words(name, self.pack_info(name, cached=cached).get("title") or "")}
             if words <= have:
                 found.append(name)
         return found
@@ -2176,7 +2248,7 @@ class StickerService:
         return True
 
     def _settings_forget_pack(self, chat: str, args: dict[str, Any]) -> dict[str, Any]:
-        wanted = str(args.get("pack") or "").strip()
+        wanted = str(args.get("pack") or "").strip()[:MAX_QUERY_CHARS]
         if wanted.lower() in ("", "this", "last", "this_sticker"):
             recent = self._recent(chat)
             if not recent:
