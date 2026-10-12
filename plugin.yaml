@@ -1,5 +1,5 @@
 name: telegram-stickers
-version: 1.1.2
+version: 1.2.0
 manifest_version: 1
 description: "Lets the agent answer with stickers from Telegram packs its owner lists or sends the bot, with default packs out of the box: picks by meaning or emoji, replies in the current chat and forum topic, avoids repeats, with per-chat pacing and an off switch."
 author: "churnast"
@@ -14,8 +14,6 @@ provides_tools:
   - telegram_sticker_settings
 provides_hooks:
   - pre_llm_call
-provides_middleware:
-  - tool_execution
 requires_env:
   - name: TELEGRAM_BOT_TOKEN
     description: "The bot token your Hermes Telegram gateway already uses. Stickers are sent as that bot."
@@ -31,7 +29,7 @@ config_schema:
     type: bool
     default: true
     label: "Learn packs from stickers you send"
-    description: "On: a sticker you send the bot in a direct chat adds its pack (after settings.packs, newest first; it stays until '/stickers forget' or until Telegram says the pack is gone). Groups never count; forwarded stickers do not either, except on Hermes 0.20.6, which has no Telegram handlers for plugins. Anyone who messages the bot directly adds packs too, so on a bot several people use, turn this off. Off: learned packs are not used or added."
+    description: "On: a sticker you send the bot in a direct chat adds its pack (after settings.packs, newest first; it stays until '/stickers forget' or until Telegram says the pack is gone). Groups never count; forwarded stickers do not either, except on Hermes 0.20.6, which has no Telegram handlers for plugins. Anyone who messages the bot directly adds packs too, so on a bot several people use, turn this off. At most max_learned_packs packs are kept. Off: learned packs are not used or added."
   default_packs:
     type: bool
     default: true
@@ -47,11 +45,6 @@ config_schema:
     default: true
     label: "Sticker hint on Telegram turns"
     description: "On: on a Telegram turn where a sticker is allowed now (stickers on in the chat, pacing passed), the plugin appends a short hint to that turn's user message, so the agent may answer a joke, good news or a strong emotion with a sticker nobody asked for. Off: no hint; the agent sends stickers only when asked or when it thinks of them itself."
-  hide_tool_progress:
-    type: bool
-    default: true
-    label: "No tool progress line before a sticker"
-    description: "On: when the agent calls a sticker tool in its tool loop on a Telegram turn, the plugin's tool_execution middleware runs it after Hermes' own pre_tool_call step and argument coercion, so where tool progress is on (the config Hermes' installer writes up to 0.21.5 turns it on for every platform) no line such as 'telegram_sticker_send...' comes before a sticker. For these calls only, the tool-loop guardrail's check before a call, transform_tool_result hooks, tool_execution middleware of plugins that run after this one and Hermes' tool start step (the progress line, and the tool_calls.log line under tool_progress: log; on Hermes main also its check for compression markers in arguments) do not run; post_tool_call hooks still do. Every other call passes through unchanged. Not with plugins.isolation: host or the Codex app-server runtime. Off: the sticker tools run like any tool, with the line."
   cooldown_seconds:
     type: int
     default: 20
@@ -62,6 +55,11 @@ config_schema:
     default: 6
     label: "Messages between stickers"
     description: "At least this many messages between two stickers in a chat, counted by Telegram message numbers, the bot's own messages included (in a direct chat, 6 is about every third message of the person). 0 turns this limit off."
+  max_learned_packs:
+    type: int
+    default: 100
+    label: "Most learned packs"
+    description: "At most this many learned packs are kept. Once there are that many, a sticker from a new pack adds nothing until '/stickers forget' removes one (the setup and '/stickers' in a direct chat say so); packs learned before are never dropped, also when this is set lower. 0 means no limit."
   describe_batch:
     type: int
     default: 30

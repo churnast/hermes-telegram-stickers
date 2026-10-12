@@ -6,6 +6,21 @@ All notable changes to this project are written down here. The format is based o
 
 ## [Unreleased]
 
+## [1.2.0] (2026-10-12)
+
+### Removed
+
+- The `tool_execution` middleware and the `hide_tool_progress` setting, as the Hermes plugin catalog review asked: plugins may extend Hermes only through public surfaces, and the middleware rebuilt Hermes' pre-call step from a private function (`hermes_cli.plugins._dispatch_pre_tool_call_hooks`), found its caller by walking the call stack and skipped some of Hermes' own steps for the sticker calls. The sticker tools now run like any other tool, so where tool progress is on, Hermes posts its line (such as `🐾 telegram_sticker_send...`) before a sticker. To hide the lines in Telegram, set `display.platforms.telegram.tool_progress: off` (see the README, Tool progress lines). `provides_middleware` is gone from `plugin.yaml`; a `hide_tool_progress` left in your config is ignored. The CI check of the middleware (`.github/scripts/check_tool_progress.py`) and its tests are removed too.
+
+### Changed
+
+- At most `max_learned_packs` learned packs (new setting, default 100; `0` means no limit). Once there are that many, a sticker from a new pack adds nothing: it costs no Telegram call, the setup tells the agent the pack was not saved, and `/stickers` in a direct chat says the limit is reached. `/stickers forget` (or "remove the pack ...") makes room. Packs learned before are never dropped, also when the setting is lower than their number. Every learned pack is used in every chat and a sync asks Telegram for each new one in turn, so on a bot several people can message directly the list no longer grows without end.
+- During the setup, the background lookup of a pack's title and size starts only for a sender Hermes let in: right away for the person the setup runs for, and on a fresh install, before the setup starts, once Hermes runs a turn for the sender; the setup turn waits up to 2 seconds for it, as before. Stickers from people Hermes does not answer start no lookup. At most 32 lookups are kept in memory or run at once (finished ones are dropped oldest first); past that, the setup names a pack without its title. The forwarded-sticker notes of the setup are kept for an hour and for at most 50 senders.
+
+### Added
+
+- Tests: the limit on learned packs (refused packs, a lower limit, `0`, odd values, room after forget, the setup's note), no lookup for senders Hermes did not let in, at most 32 lookups, and that `register()` adds no middleware.
+
 ## [1.1.2] (2026-10-11)
 
 ### Changed
@@ -151,7 +166,8 @@ First public release.
 - Pacing: about one sticker per 8 messages and a 20 second cooldown per chat, kept across restarts; the last five stickers sent in a chat are not repeated.
 - Bundled `sticker-etiquette` skill.
 
-[Unreleased]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/churnast/hermes-telegram-stickers/compare/v1.0.0...v1.1.0

@@ -511,6 +511,7 @@ def test_register_wires_tools_command_and_skill(tmp_path, monkeypatch):
     assert ctx.commands["stickers"]("dance").startswith("Usage:")
     assert ctx.skills["sticker-etiquette"].exists()
     assert set(ctx.hooks) == {"pre_llm_call"} and len(ctx.telegram) == 1
+    assert not hasattr(module, "_tool_execution_middleware")  # 1.2.0: no middleware, Hermes runs the tools
     # No packs configured: the tool answers with a readable error, not an exception.
     result = json.loads(ctx.tools["telegram_sticker_find"][2]({}))
     assert "settings.packs" in result["error"]
@@ -908,7 +909,7 @@ def test_noted_stickers_expire_and_memory_is_bounded(tmp_path):
     assert len(service._pending["555"]) == st.MAX_PENDING_PER_SENDER
 
 
-def test_learned_packs_have_no_cap(tmp_path):
+def test_learned_packs_fill_up_to_the_default_limit(tmp_path):
     service, _, now, _ = learning_service(tmp_path, packs=())
     for i in range(40):
         note(service, f"pack_{i}")
@@ -918,6 +919,48 @@ def test_learned_packs_have_no_cap(tmp_path):
     learned = service.learned_packs()
     assert len(learned) == 100 and learned[0] == "bulk_59" and learned[-1] == "pack_0"
     assert learned[60:] == [f"pack_{i}" for i in reversed(range(40))]
+    assert st.DEFAULT_MAX_LEARNED_PACKS == 100 and service.learned_full()
+    assert note(service, "one_more") == [] and len(service.learned_packs()) == 100  # the 101st is not added
+    assert service.learned_packs()[0] == "bulk_59"  # and no pack already there is dropped for it
+
+
+def test_max_learned_packs_stops_new_packs_and_forget_makes_room(tmp_path):
+    service, fake, now, cfg = learning_service(tmp_path, packs=(), config={"max_learned_packs": 2})
+    assert note(service, "dogs") == ["dogs"] and note(service, "owls") == ["owls"]
+    calls = len(fake.calls)
+    assert note(service, "cats") == [] and service.learned_packs() == ["owls", "dogs"]
+    assert service._admitted["full"] == ["cats"] and service._admitted["again"] == []
+    assert len(fake.calls) == calls  # a refused pack costs no Telegram call
+    now["t"] += 60
+    assert note(service, "dogs") == [] and service._admitted["again"] == ["dogs"]  # seen again: still fine
+    full = []
+    assert service.learn([("cats", "static"), ("memes", "static"), ("cats", "static")], full) == []
+    assert full == ["cats", "memes"]
+    status = service.command("")
+    assert "Learned packs are at their limit (2, max_learned_packs)" in status
+    assert "forgot dogs" in service.command("forget dogs")
+    assert not service.learned_full() and note(service, "cats") == ["cats"]
+    assert service.learned_packs() == ["cats", "owls"]
+
+
+def test_a_lower_max_learned_packs_keeps_the_packs_learned_before(tmp_path):
+    service, _, _, cfg = learning_service(tmp_path, packs=())
+    service.learn([(f"pack_{i}", "static") for i in range(5)])
+    cfg["max_learned_packs"] = 3
+    assert len(service.learned_packs()) == 5 and service.learned_full()
+    assert note(service, "dogs") == [] and len(service.learned_packs()) == 5
+
+
+@pytest.mark.parametrize("value, cap", [(0, 0), ("0", 0), (-5, 0), ("many", 100), (None, 100), (10**9, 10_000)])
+def test_max_learned_packs_setting_values(tmp_path, value, cap):
+    service, _, _, _ = learning_service(tmp_path, packs=(), config={"max_learned_packs": value})
+    assert service.max_learned_packs() == cap
+
+
+def test_no_limit_with_max_learned_packs_zero(tmp_path):
+    service, _, _, _ = learning_service(tmp_path, packs=(), config={"max_learned_packs": 0})
+    service.learn([(f"pack_{i}", "static") for i in range(150)])
+    assert len(service.learned_packs()) == 150 and not service.learned_full()
 
 
 def test_learned_packs_persist_with_when_they_were_learned(tmp_path):
@@ -1491,10 +1534,10 @@ def test_hook_never_raises_and_one_failing_part_keeps_the_other(tmp_path, monkey
     assert hook(platform="telegram", sender_id="555", user_message="") is None
 
 
-# --- no cap on learned packs: replies that name packs stay bounded ----------------------------------------
+# --- many learned packs: replies that name packs stay bounded --------------------------------------------
 
-def many_packs_service(tmp_path, count=100):
-    service, fake, now, cfg = learning_service(tmp_path, packs=())
+def many_packs_service(tmp_path, count=100, **config):
+    service, fake, now, cfg = learning_service(tmp_path, packs=(), config=config)
     title = "A Very Long Pack Title That Fills Sixty Four Characters Of Text"  # 64 is Telegram's maximum
     for i in range(count):
         name = f"Pack_{i:03d}_with_a_long_short_name_that_is_near_the_limit_of_64"[:64]
@@ -1506,7 +1549,7 @@ def many_packs_service(tmp_path, count=100):
 
 
 def test_many_learned_packs_keep_replies_short(tmp_path):
-    service, fake, now = many_packs_service(tmp_path)
+    service, fake, now = many_packs_service(tmp_path, max_learned_packs=0)  # 0: no limit, so a 101st pack fits
     assert len(service.learned_packs()) == 100
     status = service.command("")
     assert status.startswith("Stickers: 100 in 100 pack(s)") and len(status) < 4096
@@ -1821,3 +1864,36 @@ def test_on_the_gateway_loop_the_command_runs_in_a_worker_thread(tmp_path, monke
         return commands["stickers"]("dance")
 
     assert asyncio.run(cli()).startswith("Usage:")
+
+
+# --- 1.2.0: no tool_execution middleware, no hide_tool_progress -------------------------------------------------
+
+
+def test_register_adds_no_middleware(tmp_path, monkeypatch):
+    seen = []
+
+    class Ctx:
+        def get_config(self, key, default=None):
+            return {"setup": False, "default_packs": False}.get(key, default)
+
+        def register_middleware(self, kind, callback):
+            seen.append(kind)
+
+        def __getattr__(self, name):  # register_tool, register_command, register_hook and the rest
+            return lambda *args, **kwargs: None
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    spec = importlib.util.spec_from_file_location(
+        "telegram_stickers_plugin", ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["telegram_stickers_plugin"] = module
+    spec.loader.exec_module(module)
+    module.register(Ctx())
+    assert seen == []
+    manifest = (ROOT / "plugin.yaml").read_text(encoding="utf-8")
+    assert "provides_middleware" not in manifest and "hide_tool_progress" not in manifest
+    assert "  max_learned_packs:\n    type: int\n    default: 100\n" in manifest
+    example = (ROOT / "config.example.yaml").read_text(encoding="utf-8")
+    assert "hide_tool_progress" not in example and "max_learned_packs: 100" in example
+    plugin_code = (ROOT / "__init__.py").read_text(encoding="utf-8")
+    assert "_dispatch_pre_tool_call_hooks" not in plugin_code and "register_middleware" not in plugin_code

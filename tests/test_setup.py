@@ -531,3 +531,82 @@ def test_31_confirm_on_the_first_call_still_shows_the_list_first(tmp_path):
     assert service.settings({"action": "forget_all", "confirm": True})["confirm_needed"] is True
     assert service.settings({"action": "forget_all", "confirm": True})["success"] is True
     assert service.learned_packs() == []
+
+
+# --- 1.2.0: lookups of pack titles only for a sender Hermes let in, and at most MAX_PACK_INFO -------------------
+
+
+def lookups(service):
+    return [params["name"] for method, params in service._opener.calls if method == "getStickerSet"]
+
+
+def wait_for_lookups(service):
+    for event in list(service._pack_ready.values()):
+        assert event.wait(5)
+
+
+def test_stickers_from_strangers_start_no_lookup_before_the_setup(tmp_path):
+    service, _, _, session = fresh(tmp_path)
+    for i in range(40):  # a fresh install: nobody has been let in yet
+        assert service.note_sticker(str(1000 + i), f"pack_{i}", "static")
+        service.note_forwarded(str(2000 + i))
+    assert lookups(service) == [] and service._pack_ready == {}
+    assert len(service._forwarded) <= st.MAX_PENDING_SENDERS
+
+
+def test_the_first_sticker_of_a_fresh_install_still_names_its_pack(tmp_path):
+    service, _, _, session = fresh(tmp_path)
+    hint = turn(service, session, sticker="HotCherry_by_bot")  # the lookup starts once Hermes runs the turn
+    assert 'its pack "Hot Cherry" (HotCherry_by_bot, 2 stickers) is saved' in hint
+    assert lookups(service) == ["HotCherry_by_bot"]
+
+
+def test_during_the_setup_only_its_owner_starts_lookups(tmp_path):
+    service, _, _, session = fresh(tmp_path)
+    turn(service, session)  # the owner's setup runs
+    service.note_sticker("777", "dogs", "static")
+    assert lookups(service) == []
+    service.note_sticker(OWNER, "dogs", "static")
+    wait_for_lookups(service)
+    assert lookups(service) == ["dogs"]
+
+
+def test_pack_lookups_stay_at_most_max_pack_info(tmp_path):
+    service, _, _, session = fresh(tmp_path)
+    turn(service, session)
+    for i in range(st.MAX_PACK_INFO + 20):
+        service._opener.sets[f"pack_{i}"] = {"title": f"Pack {i}", "stickers": []}
+        service.note_sticker(OWNER, f"pack_{i}", "static")
+        assert len(service._pack_ready) <= st.MAX_PACK_INFO
+        wait_for_lookups(service)
+    assert len(service._pack_info) <= st.MAX_PACK_INFO
+    assert service.pack_info(f"pack_{st.MAX_PACK_INFO + 19}") == {"title": f"Pack {st.MAX_PACK_INFO + 19}", "count": 0}
+
+
+def test_lookups_still_running_are_never_more_than_max_pack_info(tmp_path):
+    import threading
+
+    service, _, _, session = fresh(tmp_path)
+    turn(service, session)
+    gate = threading.Event()
+    real = service._opener
+
+    def slow(request, timeout=None):
+        gate.wait(5)
+        return real(request, timeout)
+
+    service._opener = slow
+    for i in range(st.MAX_PACK_INFO + 10):
+        service.note_sticker(OWNER, f"pack_{i}", "static")
+    assert len(service._pack_ready) == st.MAX_PACK_INFO  # the rest are named without a title
+    gate.set()
+    wait_for_lookups(service)
+
+
+def test_a_sticker_over_the_learned_limit_during_the_setup(tmp_path):
+    service, _, _, session = fresh(tmp_path, max_learned_packs=1)
+    through_questions(service, session)
+    turn(service, session, sticker="HotCherry_by_bot")
+    hint = turn(service, session, sticker="dogs")
+    assert "but 1 learned packs are the limit (max_learned_packs), so it is not saved" in hint
+    assert service.learned_packs() == ["HotCherry_by_bot"]
